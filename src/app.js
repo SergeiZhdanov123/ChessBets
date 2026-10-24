@@ -58,9 +58,31 @@ function limiter(max, windowMs) {
   };
 }
 
+const escapeRegex = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 export async function createApp(opts = {}) {
   const ctx = { queueGrace: new Map() };
-  const db = (ctx.db = openDb(opts.dbPath || config.dbPath));
+  const db = (ctx.db = await openDb({ uri: opts.mongoUri || config.mongoUri, name: opts.dbName || config.mongoDb }));
+
+  // Background work (game writes, deposits, analysis) registers here so a
+  // shutdown can wait for it before closing the connection.
+  const pending = new Set();
+  ctx.track = (p) => {
+    if (!p?.then) return p;
+    pending.add(p);
+    p.then(() => pending.delete(p), () => pending.delete(p));
+    return p;
+  };
+  // One stake-taking action per user at a time (queue joins, bot games).
+  const locks = new Map();
+  ctx.userLock = (userId, fn) => {
+    const run = (locks.get(userId) || Promise.resolve()).then(fn);
+    const tail = run.catch(() => {});
+    locks.set(userId, tail);
+    tail.then(() => { if (locks.get(userId) === tail) locks.delete(userId); });
+    return run;
+  };
+
   ctx.money = createMoney(db);
   ctx.hub = createHub(ctx);
   ctx.botPool = opts.botPool || new EnginePool(config.botEngines, config.stockfishPath, { Threads: config.botThreads, Hash: config.botHashMb });
@@ -71,43 +93,55 @@ export async function createApp(opts = {}) {
   ctx.enforcement = createEnforcement(ctx);
   ctx.fairplay = new FairPlay({ db, pool: ctx.analysisPool, nodes: opts.analysisNodes || config.analysisNodes, enforce: ctx.enforcement });
 
-  const recovered = ctx.games.recover();
-  ctx.wallet.resumePending();
-  ctx.enforcement.tick();
+  const recovered = await ctx.games.recover();
+  await ctx.wallet.resumePending();
+  await ctx.enforcement.tick();
 
-  for (const name of config.adminUsers) db.run('UPDATE users SET is_admin = 1 WHERE username_lc = ?', name);
+  if (config.adminUsers.length) await db.users.updateMany({ username_lc: { $in: config.adminUsers } }, { $set: { is_admin: 1 } });
 
   // ---- auth helpers ----
-  function userFromToken(token) {
+  // Session tokens are looked up once a minute at most; the user record is
+  // read fresh on every request so balance and status are always current.
+  const sessionCache = new Map();
+  async function userFromToken(token) {
     if (!token) return null;
-    const s = db.get('SELECT * FROM sessions WHERE token_hash = ?', sha(token));
-    if (!s || s.expires_at < Date.now()) return null;
-    return db.get('SELECT * FROM users WHERE id = ?', s.user_id) || null;
+    const h = sha(token);
+    let s = sessionCache.get(h);
+    if (!s || Date.now() - s.at > 60_000) {
+      const row = await db.sessions.findOne({ _id: h }, { projection: { user_id: 1, expires_at: 1 } });
+      s = { userId: row?.user_id ?? null, expires: row?.expires_at ?? 0, at: Date.now() };
+      if (sessionCache.size > 10_000) sessionCache.clear();
+      sessionCache.set(h, s);
+    }
+    if (!s.userId || s.expires < Date.now()) return null;
+    return db.users.findOne({ _id: s.userId });
   }
 
+  const gameRowFields = { moves: 1, fen: 1, kind: 1, tc: 1, stake: 1, bot: 1, status: 1, result: 1, reason: 1, white_id: 1, black_id: 1, white_name: 1, black_name: 1, rake: 1, payout_white: 1, payout_black: 1, created_at: 1, ended_at: 1 };
+
   const api = (ctx.api = {
-    authFromRequest(req) {
+    async authFromRequest(req) {
       const c = parseCookies(req.headers.cookie);
-      return { user: userFromToken(c.cbs), device: /^[a-f0-9]{32}$/.test(c.cbd || '') ? c.cbd : null, ip: clientIp(req) };
+      return { user: await userFromToken(c.cbs), device: /^[a-f0-9]{32}$/.test(c.cbd || '') ? c.cbd : null, ip: clientIp(req) };
     },
     sameOrigin(origin, host) {
       try { return new URL(origin).host === host; } catch { return false; }
     },
-    hello(userId) {
+    async hello(userId) {
       const base = { t: 'hello', queues: ctx.matchmaker.counts(), online: ctx.hub.online() };
       if (!userId) return { ...base, user: null };
-      const u = db.get('SELECT * FROM users WHERE id = ?', userId);
+      const u = await db.users.findOne({ _id: userId });
       const g = ctx.games.activeFor(userId);
-      return { ...base, user: publicUser(u), queue: ctx.matchmaker.status(userId), activeGame: g ? g.id : null };
+      return { ...base, user: await publicUser(u), queue: ctx.matchmaker.status(userId), activeGame: g ? g.id : null };
     },
-    gameRow(id, viewerId) {
-      const r = db.get(`SELECT g.*, w.username wn, b.username bn FROM games g LEFT JOIN users w ON w.id = g.white_id LEFT JOIN users b ON b.id = g.black_id WHERE g.id = ?`, id);
+    async gameRow(id, viewerId) {
+      const r = await db.games.findOne({ _id: id }, { projection: gameRowFields });
       if (!r || r.status === 'active') return null;
-      const moves = JSON.parse(r.moves);
+      const moves = r.moves || [];
       const side = (c) => {
         const uid = c === 'w' ? r.white_id : r.black_id;
         if (!uid && r.bot) return { bot: r.bot, name: BOTS[r.bot]?.name, fullName: BOTS[r.bot]?.fullName };
-        return { userId: uid, name: c === 'w' ? r.wn : r.bn };
+        return { userId: uid, name: c === 'w' ? r.white_name : r.black_name };
       };
       const you = viewerId && r.white_id === viewerId ? 'w' : viewerId && r.black_id === viewerId ? 'b' : null;
       return {
@@ -123,13 +157,14 @@ export async function createApp(opts = {}) {
     },
   });
 
-  function publicUser(u) {
+  async function publicUser(u) {
     if (!u) return null;
     return {
-      id: u.id, username: u.username, balance: u.balance, held: ctx.money.heldTotal(u.id),
+      id: u.id, username: u.username, balance: u.balance, held: await ctx.money.heldTotal(u.id),
       status: u.status, suspendedAt: u.suspended_at, isAdmin: !!u.is_admin, createdAt: u.created_at,
     };
   }
+  const freshUser = async (id) => publicUser(await db.users.findOne({ _id: id }));
 
   // ---- express ----
   const app = express();
@@ -156,7 +191,13 @@ export async function createApp(opts = {}) {
     }
     req.device = c.cbd;
     req.ip2 = clientIp(req);
-    req.user = userFromToken(c.cbs);
+    next();
+  });
+
+  // Only API calls need the signed-in user; static files skip the lookup.
+  app.use('/api', async (req, res, next) => {
+    try { req.user = await userFromToken(req.cookies.cbs); }
+    catch (e) { console.error('session lookup', e.message); return res.status(503).json({ error: 'Service unavailable, try again shortly' }); }
     next();
   });
 
@@ -183,13 +224,16 @@ export async function createApp(opts = {}) {
     }
   };
 
-  function startSession(res, user, req) {
+  async function startSession(res, user, req) {
     const token = crypto.randomBytes(32).toString('base64url');
     const t = Date.now();
-    db.run('INSERT INTO sessions (token_hash, user_id, created_at, expires_at, ip, ua) VALUES (?,?,?,?,?,?)',
-      sha(token), user.id, t, t + config.sessionDays * 86_400_000, req.ip2, String(req.get('user-agent') || '').slice(0, 200));
-    db.run('UPDATE users SET last_ip = ?, last_seen = ? WHERE id = ?', req.ip2, t, user.id);
-    ctx.enforcement.seenDevice(user.id, req.device, req.ip2);
+    const expires = t + config.sessionDays * 86_400_000;
+    await db.sessions.insert({
+      _id: sha(token), user_id: user.id, created_at: t, expires_at: expires, expire_at: new Date(expires),
+      ip: req.ip2, ua: String(req.get('user-agent') || '').slice(0, 200),
+    });
+    await db.users.update({ _id: user.id }, { $set: { last_ip: req.ip2, last_seen: t } });
+    await ctx.enforcement.seenDevice(user.id, req.device, req.ip2);
     res.append('Set-Cookie', `cbs=${token}; Path=/; Max-Age=${config.sessionDays * 86400}; HttpOnly; SameSite=Lax${config.prod ? '; Secure' : ''}`);
   }
 
@@ -203,34 +247,44 @@ export async function createApp(opts = {}) {
     if (!/^[A-Za-z0-9_]{3,16}$/.test(name)) return res.status(400).json({ error: 'Username must be 3 to 16 letters, numbers or underscores', field: 'username' });
     if (typeof password !== 'string' || password.length < 8 || password.length > 128) return res.status(400).json({ error: 'Password must be at least 8 characters', field: 'password' });
     if (adult !== true || terms !== true) return res.status(400).json({ error: 'Confirm you are 18 or older and accept the terms', field: 'terms' });
-    if (db.get('SELECT 1 FROM users WHERE username_lc = ?', name.toLowerCase())) return res.status(409).json({ error: 'That username is taken', field: 'username' });
-    const isAdmin = config.adminUsers.includes(name.toLowerCase()) ? 1 : 0;
-    const r = db.run('INSERT INTO users (username, username_lc, pass_hash, created_at, created_ip, device_id, is_admin) VALUES (?,?,?,?,?,?,?)',
-      name, name.toLowerCase(), hashPassword(password), Date.now(), req.ip2, req.device, isAdmin);
-    const user = db.get('SELECT * FROM users WHERE id = ?', Number(r.lastInsertRowid));
-    startSession(res, user, req);
-    res.json({ user: publicUser(user) });
+    const taken = { error: 'That username is taken', field: 'username' };
+    if (await db.users.findOne({ username_lc: name.toLowerCase() }, { projection: { _id: 1 } })) return res.status(409).json(taken);
+    const id = await db.nextId('users');
+    const doc = {
+      _id: id, username: name, username_lc: name.toLowerCase(), pass_hash: hashPassword(password), balance: 0,
+      status: 'active', suspended_at: null, suspend_reason: null, forfeited: 0, review: 0,
+      is_admin: config.adminUsers.includes(name.toLowerCase()) ? 1 : 0,
+      created_at: Date.now(), created_ip: req.ip2, device_id: req.device, last_ip: null, last_seen: null,
+    };
+    try { await db.users.insert(doc); }
+    catch (e) { if (e.code === 11000) return res.status(409).json(taken); throw e; }
+    const user = await db.users.findOne({ _id: id });
+    await startSession(res, user, req);
+    res.json({ user: await publicUser(user) });
   }));
 
   app.post('/api/login', wrap(async (req, res) => {
     if (!authLimit(req.ip2)) return res.status(429).json({ error: 'Too many attempts. Wait a minute.' });
     const { username, password } = req.body || {};
-    const user = db.get('SELECT * FROM users WHERE username_lc = ?', String(username || '').trim().toLowerCase());
+    const user = await db.users.findOne({ username_lc: String(username || '').trim().toLowerCase() });
     if (!user || typeof password !== 'string' || !checkPassword(password, user.pass_hash)) return res.status(401).json({ error: 'Wrong username or password' });
-    startSession(res, user, req);
-    res.json({ user: publicUser(user) });
+    await startSession(res, user, req);
+    res.json({ user: await publicUser(user) });
   }));
 
-  app.post('/api/logout', (req, res) => {
-    if (req.cookies.cbs) db.run('DELETE FROM sessions WHERE token_hash = ?', sha(req.cookies.cbs));
+  app.post('/api/logout', wrap(async (req, res) => {
+    if (req.cookies.cbs) {
+      sessionCache.delete(sha(req.cookies.cbs));
+      await db.sessions.delete({ _id: sha(req.cookies.cbs) });
+    }
     res.append('Set-Cookie', 'cbs=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax');
     res.json({ ok: true });
-  });
+  }));
 
-  app.get('/api/me', (req, res) => {
+  app.get('/api/me', wrap(async (req, res) => {
     const g = req.user ? ctx.games.activeFor(req.user.id) : null;
-    res.json({ user: publicUser(req.user), activeGame: g?.id || null, queue: req.user ? ctx.matchmaker.status(req.user.id) : null });
-  });
+    res.json({ user: await publicUser(req.user), activeGame: g?.id || null, queue: req.user ? ctx.matchmaker.status(req.user.id) : null });
+  }));
 
   app.get('/api/config', (req, res) => {
     res.json({
@@ -252,175 +306,219 @@ export async function createApp(opts = {}) {
     const cents = Math.round(Number(stake));
     if (!BOTS[bot]) return res.status(400).json({ error: 'Pick a bot' });
     if (!Number.isInteger(cents) || cents < config.botStakeMin || cents > config.botStakeMax) return res.status(400).json({ error: 'Wager must be between $1 and $100' });
-    if (ctx.games.activeFor(req.user.id)) return res.status(409).json({ error: 'Finish your current game first', game: ctx.games.activeFor(req.user.id).id });
-    if (ctx.matchmaker.status(req.user.id)) ctx.matchmaker.leave(req.user.id, 'bot-game');
-    const g = ctx.games.createBot(req.user, bot, cents, color, { ip: req.ip2, device: req.device });
+    const g = await ctx.userLock(req.user.id, async () => {
+      const busy = ctx.games.activeFor(req.user.id);
+      if (busy) throw Object.assign(new Error('Finish your current game first'), { status: 409, game: busy.id });
+      if (ctx.matchmaker.status(req.user.id)) await ctx.matchmaker.leave(req.user.id, 'bot-game');
+      return ctx.games.createBot(req.user, bot, cents, color, { ip: req.ip2, device: req.device });
+    }).catch((e) => {
+      if (e.status === 409) { res.status(409).json({ error: e.message, game: e.game }); return null; }
+      throw e;
+    });
+    if (!g) return;
     ctx.hub.pushBalance(req.user.id);
     res.json({ id: g.id });
   }));
 
-  app.get('/api/games/:id', (req, res) => {
+  app.get('/api/games/:id', wrap(async (req, res) => {
     const g = ctx.games.get(req.params.id);
     if (g) {
       const color = req.user ? g.colorOf(req.user.id) : null;
       if (g.status === 'active' && !color) return res.status(403).json({ error: 'Live games are private to the two players' });
       return res.json({ game: g.snapshot(req.user?.id) });
     }
-    const row = api.gameRow(req.params.id, req.user?.id);
+    const row = await api.gameRow(req.params.id, req.user?.id);
     if (!row) return res.status(404).json({ error: 'Game not found' });
     res.json({ game: row });
-  });
+  }));
 
-  app.get('/api/my/games', needUser, (req, res) => {
-    const rows = db.all(
-      `SELECT g.id, g.kind, g.tc, g.stake, g.bot, g.status, g.result, g.reason, g.white_id, g.black_id, g.payout_white, g.payout_black,
-              g.created_at, g.ended_at, json_array_length(g.moves) plies, w.username wn, b.username bn
-       FROM games g LEFT JOIN users w ON w.id = g.white_id LEFT JOIN users b ON b.id = g.black_id
-       WHERE (g.white_id = ? OR g.black_id = ?) AND g.status != 'active' ORDER BY g.created_at DESC LIMIT 100`,
-      req.user.id, req.user.id,
+  app.get('/api/my/games', needUser, wrap(async (req, res) => {
+    const me = req.user.id;
+    const rows = await db.games.find(
+      { $or: [{ white_id: me }, { black_id: me }], status: { $ne: 'active' } },
+      { projection: { moves: 0, fen: 0 }, sort: { created_at: -1 }, limit: 100 },
     );
     res.json({
       games: rows.map((r) => {
-        const color = r.white_id === req.user.id ? 'w' : 'b';
-        const opp = r.kind === 'bot' ? BOTS[r.bot]?.name : color === 'w' ? r.bn : r.wn;
+        const color = r.white_id === me ? 'w' : 'b';
+        const opp = r.kind === 'bot' ? BOTS[r.bot]?.name : color === 'w' ? r.black_name : r.white_name;
         const payout = color === 'w' ? r.payout_white : r.payout_black;
         const outcome = r.status === 'aborted' ? 'aborted' : r.result === '1/2-1/2' ? 'draw' : (r.result === '1-0') === (color === 'w') ? 'win' : 'loss';
-        return { id: r.id, kind: r.kind, tc: r.tc, stake: r.stake, color, opponent: opp, bot: r.bot, outcome, reason: r.reason, payout, plies: r.plies, at: r.ended_at || r.created_at };
+        return { id: r.id, kind: r.kind, tc: r.tc, stake: r.stake, color, opponent: opp, bot: r.bot, outcome, reason: r.reason, payout, plies: r.ply ?? 0, at: r.ended_at || r.created_at };
       }),
     });
-  });
+  }));
 
-  app.get('/api/feed', (req, res) => {
-    const filter = req.query.f === 'high' ? 'AND g.stake >= 1000' : '';
-    const rows = db.all(
-      `SELECT g.*, w.username wn, b.username bn FROM games g LEFT JOIN users w ON w.id = g.white_id LEFT JOIN users b ON b.id = g.black_id
-       WHERE g.status = 'finished' ${filter} ORDER BY g.ended_at DESC LIMIT 20`,
-    );
+  app.get('/api/feed', wrap(async (req, res) => {
+    const filter = { status: 'finished', ...(req.query.f === 'high' ? { stake: { $gte: 1000 } } : {}) };
+    const rows = await db.games.find(filter, { projection: { moves: 0, fen: 0 }, sort: { ended_at: -1 }, limit: 20 });
     res.json({ rows: rows.flatMap(feedShape).slice(0, 20) });
-  });
+  }));
 
-  app.get('/api/stats', (req, res) => {
-    const day = Date.now() - 86_400_000;
+  app.get('/api/stats', wrap(async (req, res) => {
+    const recent = { status: 'finished', ended_at: { $gt: Date.now() - 86_400_000 } };
+    const [games24h, wagered24h] = await Promise.all([
+      db.games.count(recent),
+      db.games.sum({ $cond: [{ $eq: ['$kind', 'human'] }, { $multiply: ['$stake', 2] }, '$stake'] }, recent),
+    ]);
     res.json({
       online: ctx.hub.online(),
       playing: [...ctx.games.live.values()].filter((g) => g.status === 'active').length,
-      games24h: db.get("SELECT COUNT(*) n FROM games WHERE status = 'finished' AND ended_at > ?", day).n,
-      wagered24h: db.get("SELECT COALESCE(SUM(stake * CASE kind WHEN 'human' THEN 2 ELSE 1 END),0) s FROM games WHERE status = 'finished' AND ended_at > ?", day).s,
+      games24h,
+      wagered24h,
     });
-  });
+  }));
 
   // ---- wallet ----
-  app.get('/api/wallet', needUser, (req, res) => {
-    res.json({ ...ctx.wallet.overview(req.user.id), user: publicUser(req.user), coins: coinList(), feeBps: config.withdrawFeeBps, minWithdraw: config.minWithdraw });
-  });
+  app.get('/api/wallet', needUser, wrap(async (req, res) => {
+    res.json({ ...(await ctx.wallet.overview(req.user.id)), user: await publicUser(req.user), coins: coinList(), feeBps: config.withdrawFeeBps, minWithdraw: config.minWithdraw });
+  }));
   app.post('/api/wallet/address', needUser, needActive, wrap(async (req, res) => {
     res.json(await ctx.wallet.address(req.user.id, String(req.body?.coin || '')));
   }));
   app.post('/api/wallet/deposit', needUser, needActive, wrap(async (req, res) => {
     const amount = Math.round(Number(req.body?.amount));
-    res.json({ deposit: ctx.wallet.testDeposit(req.user, String(req.body?.coin || ''), amount) });
+    res.json({ deposit: await ctx.wallet.testDeposit(req.user, String(req.body?.coin || ''), amount) });
   }));
   app.post('/api/wallet/withdraw', needUser, needActive, wrap(async (req, res) => {
     const amount = Math.round(Number(req.body?.amount));
-    const w = ctx.wallet.withdraw(req.user, String(req.body?.coin || ''), req.body?.address, amount);
-    res.json({ withdrawal: w, user: publicUser(db.get('SELECT * FROM users WHERE id = ?', req.user.id)) });
+    const w = await ctx.wallet.withdraw(req.user, String(req.body?.coin || ''), req.body?.address, amount);
+    res.json({ withdrawal: w, user: await freshUser(req.user.id) });
   }));
 
   // ---- support ----
-  app.get('/api/tickets', needUser, (req, res) => {
-    const tickets = db.all('SELECT * FROM tickets WHERE user_id = ? ORDER BY updated_at DESC', req.user.id);
-    for (const t of tickets) t.messages = db.all('SELECT author, body, created_at FROM ticket_messages WHERE ticket_id = ? ORDER BY id', t.id);
-    res.json({ tickets });
-  });
+  const ticketOut = ({ messages, ...t }) => ({ ...t, messages: messages || [] });
+  app.get('/api/tickets', needUser, wrap(async (req, res) => {
+    const tickets = await db.tickets.find({ user_id: req.user.id }, { sort: { updated_at: -1 } });
+    res.json({ tickets: tickets.map(ticketOut) });
+  }));
   app.post('/api/tickets', needUser, wrap(async (req, res) => {
     const subject = String(req.body?.subject || '').trim().slice(0, 120);
     const body = String(req.body?.body || '').trim().slice(0, 4000);
     if (subject.length < 3 || body.length < 10) return res.status(400).json({ error: 'Add a subject and a few words about the problem' });
-    const open = db.get("SELECT COUNT(*) n FROM tickets WHERE user_id = ? AND status = 'open'", req.user.id).n;
+    const open = await db.tickets.count({ user_id: req.user.id, status: 'open' });
     if (open >= 5) return res.status(429).json({ error: 'You already have 5 open tickets' });
     const t = Date.now();
-    const r = db.run('INSERT INTO tickets (user_id, subject, created_at, updated_at) VALUES (?,?,?,?)', req.user.id, subject, t, t);
-    db.run('INSERT INTO ticket_messages (ticket_id, author, body, created_at) VALUES (?,?,?,?)', Number(r.lastInsertRowid), 'user', body, t);
-    res.json({ id: Number(r.lastInsertRowid) });
+    const id = await db.nextId('tickets');
+    await db.tickets.insert({ _id: id, user_id: req.user.id, subject, status: 'open', created_at: t, updated_at: t, messages: [{ author: 'user', body, created_at: t }] });
+    res.json({ id });
   }));
   app.post('/api/tickets/:id/reply', needUser, wrap(async (req, res) => {
-    const t = db.get('SELECT * FROM tickets WHERE id = ? AND user_id = ?', Number(req.params.id), req.user.id);
-    if (!t) return res.status(404).json({ error: 'Ticket not found' });
     const body = String(req.body?.body || '').trim().slice(0, 4000);
     if (!body) return res.status(400).json({ error: 'Write a message' });
-    db.run('INSERT INTO ticket_messages (ticket_id, author, body, created_at) VALUES (?,?,?,?)', t.id, 'user', body, Date.now());
-    db.run("UPDATE tickets SET status = 'open', updated_at = ? WHERE id = ?", Date.now(), t.id);
+    const t = Date.now();
+    const r = await db.tickets.update(
+      { _id: Number(req.params.id), user_id: req.user.id },
+      { $push: { messages: { author: 'user', body, created_at: t } }, $set: { status: 'open', updated_at: t } },
+    );
+    if (!r.matchedCount) return res.status(404).json({ error: 'Ticket not found' });
     res.json({ ok: true });
   }));
 
   // ---- admin ----
-  app.get('/api/admin/overview', needUser, needAdmin, (req, res) => {
-    const house = db.all('SELECT kind, SUM(amount) total, COUNT(*) n FROM ledger WHERE user_id IS NULL GROUP BY kind');
-    const flagged = db.all(
-      `SELECT u.id, u.username, u.status, u.review, u.balance, u.suspend_reason,
-              (SELECT MAX(evidence) FROM fair_play_reports r WHERE r.user_id = u.id) maxEvidence,
-              (SELECT COUNT(*) FROM fair_play_events e WHERE e.user_id = u.id) events
-       FROM users u WHERE u.review = 1 OR u.status = 'suspended' ORDER BY u.id DESC LIMIT 100`,
+  app.get('/api/admin/overview', needUser, needAdmin, wrap(async (req, res) => {
+    const house = (await db.ledger.aggregate([
+      { $match: { user_id: null } },
+      { $group: { _id: '$kind', total: { $sum: '$amount' }, n: { $sum: 1 } } },
+    ])).map((h) => ({ kind: h._id, total: h.total, n: h.n }));
+
+    const flagged = await db.users.find(
+      { $or: [{ review: 1 }, { status: 'suspended' }] },
+      { projection: { username: 1, status: 1, review: 1, balance: 1, suspend_reason: 1 }, sort: { _id: -1 }, limit: 100 },
     );
-    const pending = db.all(`SELECT a.*, u.username FROM scheduled_actions a JOIN users u ON u.id = a.user_id WHERE a.status = 'pending' ORDER BY run_at`);
+    const ids = flagged.map((u) => u.id);
+    const [maxEv, evCount] = await Promise.all([
+      db.fair_play_reports.aggregate([{ $match: { user_id: { $in: ids } } }, { $group: { _id: '$user_id', m: { $max: '$evidence' } } }]),
+      db.fair_play_events.aggregate([{ $match: { user_id: { $in: ids } } }, { $group: { _id: '$user_id', n: { $sum: 1 } } }]),
+    ]);
+    const maxBy = new Map(maxEv.map((r) => [r._id, r.m]));
+    const evBy = new Map(evCount.map((r) => [r._id, r.n]));
+    for (const u of flagged) { u.maxEvidence = maxBy.get(u.id) ?? null; u.events = evBy.get(u.id) || 0; }
+
+    const pending = await db.scheduled_actions.find({ status: 'pending' }, { sort: { run_at: 1 } });
+    const names = new Map((await db.users.find({ _id: { $in: pending.map((a) => a.user_id) } }, { projection: { username: 1 } })).map((u) => [u.id, u.username]));
+    for (const a of pending) a.username = names.get(a.user_id) || null;
+
+    const [users, balances, held, games, openTickets] = await Promise.all([
+      db.users.count(),
+      db.users.sum('$balance'),
+      db.holds.sum('$amount', { status: 'held' }),
+      db.games.count({ status: 'finished' }),
+      db.tickets.count({ status: 'open' }),
+    ]);
+    res.json({ house, flagged, pending, totals: { users, balances, held, games, openTickets }, model: MODEL });
+  }));
+  app.get('/api/admin/users', needUser, needAdmin, wrap(async (req, res) => {
+    const q = String(req.query.q || '').toLowerCase().slice(0, 32);
     res.json({
-      house, flagged, pending,
-      totals: {
-        users: db.get('SELECT COUNT(*) n FROM users').n,
-        balances: db.get('SELECT COALESCE(SUM(balance),0) s FROM users').s,
-        held: db.get("SELECT COALESCE(SUM(amount),0) s FROM holds WHERE status = 'held'").s,
-        games: db.get("SELECT COUNT(*) n FROM games WHERE status = 'finished'").n,
-        openTickets: db.get("SELECT COUNT(*) n FROM tickets WHERE status = 'open'").n,
-      },
-      model: MODEL,
+      users: await db.users.find(
+        q ? { username_lc: { $regex: escapeRegex(q) } } : {},
+        { projection: { username: 1, balance: 1, status: 1, review: 1, created_at: 1, last_ip: 1 }, sort: { _id: -1 }, limit: 50 },
+      ),
     });
-  });
-  app.get('/api/admin/users', needUser, needAdmin, (req, res) => {
-    const q = `%${String(req.query.q || '').toLowerCase()}%`;
-    res.json({ users: db.all('SELECT id, username, balance, status, review, created_at, last_ip FROM users WHERE username_lc LIKE ? ORDER BY id DESC LIMIT 50', q) });
-  });
-  app.get('/api/admin/users/:id', needUser, needAdmin, (req, res) => {
+  }));
+  app.get('/api/admin/users/:id', needUser, needAdmin, wrap(async (req, res) => {
     const id = Number(req.params.id);
-    const u = db.get('SELECT id, username, balance, status, review, forfeited, suspend_reason, suspended_at, created_at, created_ip, last_ip FROM users WHERE id = ?', id);
+    const u = await db.users.findOne({ _id: id }, { projection: { username: 1, balance: 1, status: 1, review: 1, forfeited: 1, suspend_reason: 1, suspended_at: 1, created_at: 1, created_ip: 1, last_ip: 1 } });
     if (!u) return res.status(404).json({ error: 'No such user' });
-    const reports = db.all('SELECT game_id, evidence, verdict, metrics, created_at FROM fair_play_reports WHERE user_id = ? ORDER BY id DESC LIMIT 30', id)
-      .map((r) => ({ ...r, metrics: JSON.parse(r.metrics) }));
+    const [reports, events, devices, ledger, pendingActions] = await Promise.all([
+      db.fair_play_reports.find({ user_id: id }, { projection: { _id: 0, game_id: 1, evidence: 1, verdict: 1, metrics: 1, created_at: 1 }, sort: { created_at: -1 }, limit: 30 }),
+      db.fair_play_events.find({ user_id: id }, { projection: { _id: 0, game_id: 1, kind: 1, detail: 1, created_at: 1 }, sort: { _id: -1 }, limit: 100 }),
+      db.user_devices.find({ user_id: id }, { projection: { _id: 0, device_id: 1, ip: 1, last_seen: 1 } }),
+      db.ledger.find({ user_id: id }, { projection: { _id: 0, kind: 1, amount: 1, balance_after: 1, ref: 1, note: 1, created_at: 1 }, sort: { _id: -1 }, limit: 50 }),
+      db.scheduled_actions.find({ user_id: id, status: 'pending' }),
+    ]);
+    // Other accounts seen on each of this user's browsers.
+    const others = await db.user_devices.find({ device_id: { $in: devices.map((d) => d.device_id) }, user_id: { $ne: id } }, { projection: { device_id: 1, user_id: 1 } });
+    const otherNames = new Map((await db.users.find({ _id: { $in: [...new Set(others.map((o) => o.user_id))] } }, { projection: { username: 1 } })).map((x) => [x.id, x.username]));
+    for (const d of devices) {
+      const list = others.filter((o) => o.device_id === d.device_id).map((o) => otherNames.get(o.user_id)).filter(Boolean);
+      d.shared = list.length ? list.join(',') : null;
+    }
     res.json({
       user: u,
       account: accountEvidence(reports.slice(0, MODEL.historyGames).map((r) => r.metrics)),
       reports,
-      events: db.all('SELECT game_id, kind, detail, created_at FROM fair_play_events WHERE user_id = ? ORDER BY id DESC LIMIT 100', id),
-      devices: db.all(`SELECT d.device_id, d.ip, d.last_seen, (SELECT GROUP_CONCAT(u2.username) FROM user_devices d2 JOIN users u2 ON u2.id = d2.user_id WHERE d2.device_id = d.device_id AND d2.user_id != d.user_id) shared
-                       FROM user_devices d WHERE d.user_id = ?`, id),
-      ledger: db.all('SELECT kind, amount, balance_after, ref, note, created_at FROM ledger WHERE user_id = ? ORDER BY id DESC LIMIT 50', id),
-      pending: db.all("SELECT * FROM scheduled_actions WHERE user_id = ? AND status = 'pending'", id),
+      events,
+      devices,
+      ledger,
+      pending: pendingActions,
     });
-  });
+  }));
   app.post('/api/admin/users/:id/suspend', needUser, needAdmin, wrap(async (req, res) => {
     const reason = String(req.body?.reason || 'Suspended by staff').slice(0, 300);
-    res.json({ ok: ctx.enforcement.suspend(Number(req.params.id), reason, null, { refund: req.body?.refund !== false }) });
+    res.json({ ok: await ctx.enforcement.suspend(Number(req.params.id), reason, null, { refund: req.body?.refund !== false }) });
   }));
   app.post('/api/admin/users/:id/reinstate', needUser, needAdmin, wrap(async (req, res) => {
-    res.json({ ok: ctx.enforcement.reinstate(Number(req.params.id), { restore: !!req.body?.restore }) });
+    res.json({ ok: await ctx.enforcement.reinstate(Number(req.params.id), { restore: !!req.body?.restore }) });
   }));
   app.post('/api/admin/users/:id/clear-review', needUser, needAdmin, wrap(async (req, res) => {
     const id = Number(req.params.id);
-    db.run("UPDATE scheduled_actions SET status = 'cancelled', done_at = ? WHERE user_id = ? AND status = 'pending'", Date.now(), id);
-    ctx.enforcement.clearReview(id);
+    await db.scheduled_actions.updateMany({ user_id: id, status: 'pending' }, { $set: { status: 'cancelled', done_at: Date.now() } });
+    await ctx.enforcement.clearReview(id);
     res.json({ ok: true });
   }));
-  app.get('/api/admin/tickets', needUser, needAdmin, (req, res) => {
-    const tickets = db.all(`SELECT t.*, u.username, u.status user_status FROM tickets t JOIN users u ON u.id = t.user_id ORDER BY t.status = 'open' DESC, t.updated_at DESC LIMIT 100`);
-    for (const t of tickets) t.messages = db.all('SELECT author, body, created_at FROM ticket_messages WHERE ticket_id = ? ORDER BY id', t.id);
-    res.json({ tickets });
-  });
+  app.get('/api/admin/tickets', needUser, needAdmin, wrap(async (req, res) => {
+    const tickets = await db.tickets.aggregate([
+      { $addFields: { open: { $cond: [{ $eq: ['$status', 'open'] }, 1, 0] } } },
+      { $sort: { open: -1, updated_at: -1 } },
+      { $limit: 100 },
+      { $lookup: { from: 'users', localField: 'user_id', foreignField: '_id', as: 'u', pipeline: [{ $project: { username: 1, status: 1 } }] } },
+    ]);
+    res.json({
+      tickets: tickets.map(({ _id, u, open, ...t }) => ticketOut({ id: _id, ...t, username: u[0]?.username ?? null, user_status: u[0]?.status ?? null })),
+    });
+  }));
   app.post('/api/admin/tickets/:id/reply', needUser, needAdmin, wrap(async (req, res) => {
     const id = Number(req.params.id);
-    const t = db.get('SELECT * FROM tickets WHERE id = ?', id);
+    const t = await db.tickets.findOne({ _id: id }, { projection: { user_id: 1 } });
     if (!t) return res.status(404).json({ error: 'Ticket not found' });
     const body = String(req.body?.body || '').trim().slice(0, 4000);
-    if (body) db.run('INSERT INTO ticket_messages (ticket_id, author, body, created_at) VALUES (?,?,?,?)', id, 'staff', body, Date.now());
-    db.run('UPDATE tickets SET status = ?, updated_at = ? WHERE id = ?', req.body?.close ? 'closed' : 'answered', Date.now(), id);
+    const now = Date.now();
+    await db.tickets.update({ _id: id }, {
+      ...(body ? { $push: { messages: { author: 'staff', body, created_at: now } } } : {}),
+      $set: { status: req.body?.close ? 'closed' : 'answered', updated_at: now },
+    });
     ctx.hub.toUser(t.user_id, { t: 'notice', kind: 'ticket', id });
     res.json({ ok: true });
   }));
@@ -437,7 +535,9 @@ export async function createApp(opts = {}) {
   const server = http.createServer(app);
   ctx.hub.attach(server);
 
-  ctx.close = async () => {
+  // `crash: true` stops everything without waiting for in-flight work, the
+  // way a killed process would (used by the restart test).
+  ctx.close = async ({ crash = false } = {}) => {
     ctx.closed = true;
     ctx.fairplay.closed = true;
     ctx.matchmaker.stop();
@@ -447,7 +547,11 @@ export async function createApp(opts = {}) {
     await new Promise((r) => server.close(() => r()));
     if (!opts.botPool) ctx.botPool.quit();
     if (!opts.analysisPool) ctx.analysisPool.quit();
-    db.close();
+    if (!crash) {
+      const deadline = Date.now() + 15_000;
+      while (pending.size && Date.now() < deadline) await Promise.race([Promise.allSettled([...pending]), new Promise((r) => setTimeout(r, 1000))]);
+    }
+    await db.close();
   };
 
   return { app, server, ctx, recovered };

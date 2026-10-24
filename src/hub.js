@@ -18,6 +18,7 @@ export function createHub(ctx) {
   const conns = new Set();
   const byUser = new Map();
   const subs = new Map(); // gameId -> Set(conn)
+  const pushing = new Map();
 
   const send = (conn, msg) => { if (conn.ws.readyState === 1) conn.ws.send(JSON.stringify(msg)); };
 
@@ -33,9 +34,22 @@ export function createHub(ctx) {
     },
     all(msg) { const s = JSON.stringify(msg); for (const c of conns) if (c.ws.readyState === 1) c.ws.send(s); },
     feed(rows) { if (rows?.length) hub.all({ t: 'feed', rows }); },
+    // Reads the balance and sends it. Calls that land while a read is in
+    // flight fold into one more read after it, so the last message a client
+    // gets is always the newest balance.
     pushBalance(userId) {
-      const u = ctx.db.get('SELECT balance, status FROM users WHERE id = ?', userId);
-      if (u) hub.toUser(userId, { t: 'balance', balance: u.balance, held: ctx.money.heldTotal(userId), status: u.status });
+      if (!byUser.has(userId)) return;
+      const running = pushing.get(userId);
+      if (running) { running.again = true; return; }
+      const state = { again: true };
+      pushing.set(userId, state);
+      (async () => {
+        while (state.again && !ctx.closed) {
+          state.again = false;
+          const u = await ctx.db.users.findOne({ _id: userId }, { projection: { balance: 1, status: 1 } });
+          if (u) hub.toUser(userId, { t: 'balance', balance: u.balance, held: await ctx.money.heldTotal(userId), status: u.status });
+        }
+      })().catch(() => {}).finally(() => pushing.delete(userId));
     },
     // Signed-in people plus guest connections.
     online: () => byUser.size + [...conns].filter((c) => !c.userId).length,
@@ -50,8 +64,10 @@ export function createHub(ctx) {
 
   function userConnected(userId) { return (byUser.get(userId)?.size || 0) > 0; }
 
+  // Game messages are handled synchronously, in the order they arrive. Only
+  // queue joins and finished-game lookups wait on the database.
   function handle(conn, msg) {
-    const user = conn.userId ? ctx.db.get('SELECT * FROM users WHERE id = ?', conn.userId) : null;
+    const userId = conn.userId;
     const reply = (m) => send(conn, m);
     const err = (message, extra = {}) => reply({ t: 'error', message, ...extra });
 
@@ -64,8 +80,10 @@ export function createHub(ctx) {
         const g = ctx.games.get(String(msg.id || ''));
         if (!g) {
           // Finished games come from the database.
-          const row = ctx.api.gameRow(String(msg.id || ''), conn.userId);
-          return row ? reply({ t: 'game', game: row }) : err('Game not found', { code: 'not_found' });
+          ctx.api.gameRow(String(msg.id || ''), userId)
+            .then((row) => (row ? reply({ t: 'game', game: row }) : err('Game not found', { code: 'not_found' })))
+            .catch(() => err('Game not found', { code: 'not_found' }));
+          return;
         }
         const color = conn.userId ? g.colorOf(conn.userId) : null;
         if (g.status === 'active' && !color) return err('Live games are private to the two players', { code: 'private' });
@@ -73,22 +91,22 @@ export function createHub(ctx) {
         if (color && g.status === 'active') {
           // Two different browsers driving one seat at once is worth noting.
           const others = [...(subs.get(g.id) || [])].filter((c) => c !== conn && c.userId === conn.userId && c.device !== conn.device);
-          if (others.length) ctx.enforcement.event(conn.userId, g.id, 'multi_device', 'Game opened on two devices at once');
+          if (others.length) ctx.enforcement.event(conn.userId, g.id, 'multi_device', 'Game opened on two devices at once').catch(() => {});
           g.presence(color, true);
         }
         return reply({ t: 'game', game: g.snapshot(conn.userId) });
       }
 
       case 'move': case 'resign': case 'abort': case 'draw-offer': case 'draw-accept': case 'draw-decline': case 'chat': {
-        if (!user) return err('Sign in first');
+        if (!userId) return err('Sign in first');
         const g = ctx.games.get(String(msg.id || ''));
         if (!g) return err('Game not found');
-        const color = g.colorOf(user.id);
+        const color = g.colorOf(userId);
         if (!color) return err('Not your game');
         let e = null;
         if (msg.t === 'move') {
           e = g.move(color, msg.u, { ply: msg.ply, blur: msg.blur, hidden: msg.hidden, lagComp: Math.round((conn.rtt || 0) / 2) });
-          if (e) reply({ t: 'reject', id: g.id, message: e, game: g.snapshot(user.id) });
+          if (e) reply({ t: 'reject', id: g.id, message: e, game: g.snapshot(userId) });
           return;
         }
         if (msg.t === 'resign') g.resign(color);
@@ -110,17 +128,20 @@ export function createHub(ctx) {
       }
 
       case 'queue-join': {
-        if (!user) return err('Sign in first', { code: 'auth' });
-        try {
-          const r = ctx.matchmaker.join(user, msg.tc, msg.stake, { ip: conn.ip, device: conn.device });
-          reply({ t: 'queue', state: 'joined', ...r, tc: Number(msg.tc), stake: Number(msg.stake) });
-        } catch (e2) {
-          err(e2.message, { code: e2.code });
-        }
+        if (!userId) return err('Sign in first', { code: 'auth' });
+        (async () => {
+          const user = await ctx.db.users.findOne({ _id: userId });
+          if (!user) return err('Sign in first', { code: 'auth' });
+          const r = await ctx.matchmaker.join(user, msg.tc, msg.stake, { ip: conn.ip, device: conn.device });
+          if (!r.cancelled) reply({ t: 'queue', state: 'joined', ...r, tc: Number(msg.tc), stake: Number(msg.stake) });
+        })().catch((e2) => {
+          if (!e2.code) console.error('queue join', e2);
+          err(e2.code ? e2.message : 'Could not join the queue', { code: e2.code });
+        });
         return;
       }
       case 'queue-leave':
-        if (user) ctx.matchmaker.leave(user.id);
+        if (userId) ctx.matchmaker.leave(userId).catch((e2) => console.error('queue leave', e2.message));
         return;
     }
   }
@@ -135,16 +156,24 @@ export function createHub(ctx) {
     });
 
     wss.on('connection', (ws, req) => {
-      const auth = ctx.api.authFromRequest(req);
-      const conn = { ws, userId: auth.user?.id || null, device: auth.device, ip: auth.ip, rtt: 0, games: new Set(), bucket: { n: 0, at: Date.now() } };
+      const conn = { ws, userId: null, device: null, ip: null, rtt: 0, games: new Set(), bucket: { n: 0, at: Date.now() } };
       conns.add(conn);
-      if (conn.userId) {
-        if (!byUser.has(conn.userId)) byUser.set(conn.userId, new Set());
-        byUser.get(conn.userId).add(conn);
-        clearTimeout(ctx.queueGrace?.get(conn.userId));
-        ctx.enforcement.seenDevice(conn.userId, conn.device, conn.ip);
-      }
-      send(conn, ctx.api.hello(conn.userId));
+      // Handlers are attached right away; messages that arrive before the
+      // session lookup finishes wait for it, still in order.
+      conn.ready = (async () => {
+        const auth = await ctx.api.authFromRequest(req);
+        Object.assign(conn, { userId: auth.user?.id || null, device: auth.device, ip: auth.ip });
+        if (conn.userId) {
+          if (!byUser.has(conn.userId)) byUser.set(conn.userId, new Set());
+          byUser.get(conn.userId).add(conn);
+          clearTimeout(ctx.queueGrace?.get(conn.userId));
+          ctx.enforcement.seenDevice(conn.userId, conn.device, conn.ip).catch(() => {});
+        }
+        send(conn, await ctx.api.hello(conn.userId));
+      })().catch((e) => {
+        if (!ctx.closed) console.error('ws connect', e.message);
+        ws.close(1011);
+      });
 
       ws.on('message', (data) => {
         const b = conn.bucket;
@@ -154,25 +183,34 @@ export function createHub(ctx) {
         let msg;
         try { msg = JSON.parse(data); } catch { return; }
         if (!msg || typeof msg.t !== 'string') return;
-        try { handle(conn, msg); } catch (e) { console.error('ws handler', e); }
+        conn.ready.then(() => {
+          if (ctx.closed) return;
+          try { handle(conn, msg); } catch (e) { console.error('ws handler', e); }
+        });
       });
 
       ws.on('close', () => {
         conns.delete(conn);
-        if (ctx.closed) return; // shutting down: no presence or queue timers
-        for (const id of conn.games) subs.get(id)?.delete(conn);
-        if (!conn.userId) return;
-        byUser.get(conn.userId)?.delete(conn);
-        if (userConnected(conn.userId)) return;
-        byUser.delete(conn.userId);
-        const g = ctx.games.activeFor(conn.userId);
-        if (g) g.presence(g.colorOf(conn.userId), false);
-        // A page reload reconnects within a second or two; give it a moment
-        // before dropping someone out of a queue.
-        const uid = conn.userId;
-        ctx.queueGrace.set(uid, setTimeout(() => { if (!userConnected(uid)) ctx.matchmaker.leave(uid, 'disconnected'); }, 8000));
+        conn.ready.then(() => disconnected(conn));
       });
     });
+
+    function disconnected(conn) {
+      if (ctx.closed) return; // shutting down: no presence or queue timers
+      for (const id of conn.games) subs.get(id)?.delete(conn);
+      if (!conn.userId) return;
+      byUser.get(conn.userId)?.delete(conn);
+      if (userConnected(conn.userId)) return;
+      byUser.delete(conn.userId);
+      const g = ctx.games.activeFor(conn.userId);
+      if (g) g.presence(g.colorOf(conn.userId), false);
+      // A page reload reconnects within a second or two; give it a moment
+      // before dropping someone out of a queue.
+      const uid = conn.userId;
+      ctx.queueGrace.set(uid, setTimeout(() => {
+        if (!userConnected(uid)) ctx.matchmaker.leave(uid, 'disconnected').catch(() => {});
+      }, 8000));
+    }
 
     const ping = setInterval(() => { const ts = Date.now(); for (const c of conns) send(c, { t: 'ping', ts }); }, 5000);
     ping.unref?.();

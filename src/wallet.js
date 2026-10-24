@@ -43,11 +43,16 @@ export function createWallet(ctx) {
 
   async function address(userId, coin) {
     checkCoin(coin);
-    let row = db.get('SELECT address FROM deposit_addresses WHERE user_id = ? AND coin = ?', userId, coin);
+    let row = await db.deposit_addresses.findOne({ user_id: userId, coin });
     if (!row) {
       const addr = demoAddress(coin);
-      db.run('INSERT INTO deposit_addresses (user_id, coin, address, created_at) VALUES (?,?,?,?)', userId, coin, addr, now());
-      row = { address: addr };
+      try {
+        await db.deposit_addresses.insert({ user_id: userId, coin, address: addr, created_at: now() });
+        row = { address: addr };
+      } catch (e) {
+        if (e.code !== 11000) throw e;
+        row = await db.deposit_addresses.findOne({ user_id: userId, coin }); // two tabs asked at once
+      }
     }
     const qr = await QRCode.toString(row.address, { type: 'svg', margin: 1, color: { dark: '#0f212eff', light: '#ffffffff' } });
     return { coin, address: row.address, qr };
@@ -55,61 +60,59 @@ export function createWallet(ctx) {
 
   // Simulates an incoming transfer: it shows up unconfirmed, ticks through
   // confirmations, then credits the balance.
-  function testDeposit(user, coin, amount) {
+  async function testDeposit(user, coin, amount) {
     checkCoin(coin);
     if (user.status !== 'active') throw new MoneyError('suspended', 'Account suspended');
     if (!Number.isInteger(amount) || amount < 100) throw new MoneyError('bad_amount', 'Minimum deposit is $1.00');
     if (amount > config.maxTestDeposit) throw new MoneyError('bad_amount', 'Maximum test deposit is $1,000.00');
-    const today = db.get("SELECT COALESCE(SUM(amount),0) s FROM deposits WHERE user_id = ? AND created_at > ?", user.id, now() - 86_400_000).s;
+    const today = await db.deposits.sum('$amount', { user_id: user.id, created_at: { $gt: now() - 86_400_000 } });
     if (today + amount > config.dailyTestDepositCap) throw new MoneyError('cap', 'Daily test deposit limit is $10,000.00');
-    const addr = db.get('SELECT address FROM deposit_addresses WHERE user_id = ? AND coin = ?', user.id, coin);
+    const addr = await db.deposit_addresses.findOne({ user_id: user.id, coin });
     if (!addr) throw new MoneyError('no_address', 'Generate a deposit address first');
     const c = COINS[coin];
-    const r = db.run(
-      'INSERT INTO deposits (user_id, coin, address, amount, coin_amount, required, status, txid, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
-      user.id, coin, addr.address, amount, toCoin(amount, coin), c.confirmations, 'pending', txid(), now(),
-    );
-    const id = Number(r.lastInsertRowid);
+    const id = await db.nextId('deposits');
+    await db.deposits.insert({
+      _id: id, user_id: user.id, coin, address: addr.address, amount, coin_amount: toCoin(amount, coin),
+      confirmations: 0, required: c.confirmations, status: 'pending', txid: txid(), created_at: now(), credited_at: null,
+    });
     scheduleConfirm(id);
     return depositRow(id);
   }
 
   function scheduleConfirm(id) {
-    setTimeout(() => confirmStep(id), config.depositConfirmMs).unref?.();
+    setTimeout(() => ctx.track(confirmStep(id).catch((e) => console.error('deposit', id, e.message))), config.depositConfirmMs).unref?.();
   }
 
-  function confirmStep(id) {
+  async function confirmStep(id) {
     if (ctx.closed) return;
-    const d = db.get('SELECT * FROM deposits WHERE id = ?', id);
+    const d = await db.deposits.findOne({ _id: id });
     if (!d || d.status !== 'pending') return;
     const conf = d.confirmations + 1;
     if (conf < d.required) {
-      db.run('UPDATE deposits SET confirmations = ? WHERE id = ?', conf, id);
-      hub.toUser(d.user_id, { t: 'wallet', deposit: depositRow(id) });
+      await db.deposits.update({ _id: id, status: 'pending' }, { $set: { confirmations: conf } });
+      hub.toUser(d.user_id, { t: 'wallet', deposit: await depositRow(id) });
       scheduleConfirm(id);
       return;
     }
-    const u = db.get('SELECT status FROM users WHERE id = ?', d.user_id);
-    db.tx(() => {
-      if (u.status !== 'active') {
-        // Funds sent to a suspended account are forfeited like the rest.
-        db.run("UPDATE deposits SET confirmations = ?, status = 'forfeited', credited_at = ? WHERE id = ?", conf, now(), id);
-        money.house(d.amount, 'forfeit', `deposit:${id}`);
-        return;
-      }
-      db.run("UPDATE deposits SET confirmations = ?, status = 'credited', credited_at = ? WHERE id = ?", conf, now(), id);
-      money.userEntry(d.user_id, d.amount, 'deposit', `deposit:${id}`, `${d.coin_amount} ${d.coin}`);
+    await db.tx(async () => {
+      const u = await db.users.findOne({ _id: d.user_id }, { projection: { status: 1 } });
+      const status = u.status === 'active' ? 'credited' : 'forfeited';
+      const r = await db.deposits.update({ _id: id, status: 'pending' }, { $set: { confirmations: conf, status, credited_at: now() } });
+      if (!r.modifiedCount) return;
+      // Funds sent to a suspended account are forfeited like the rest.
+      if (status === 'forfeited') await money.house(d.amount, 'forfeit', `deposit:${id}`);
+      else await money.userEntry(d.user_id, d.amount, 'deposit', `deposit:${id}`, `${d.coin_amount} ${d.coin}`);
     });
-    hub.toUser(d.user_id, { t: 'wallet', deposit: depositRow(id) });
+    hub.toUser(d.user_id, { t: 'wallet', deposit: await depositRow(id) });
     hub.pushBalance(d.user_id);
   }
 
-  function resumePending() {
-    for (const d of db.all("SELECT id FROM deposits WHERE status = 'pending'")) scheduleConfirm(d.id);
-    for (const w of db.all("SELECT id FROM withdrawals WHERE status = 'processing'")) scheduleWithdraw(w.id);
+  async function resumePending() {
+    for (const d of await db.deposits.find({ status: 'pending' }, { projection: { _id: 1 } })) scheduleConfirm(d.id);
+    for (const w of await db.withdrawals.find({ status: 'processing' }, { projection: { _id: 1 } })) scheduleWithdraw(w.id);
   }
 
-  function withdraw(user, coin, address, amount) {
+  async function withdraw(user, coin, address, amount) {
     checkCoin(coin);
     if (user.status !== 'active') throw new MoneyError('suspended', 'Account suspended');
     address = String(address || '').trim();
@@ -117,15 +120,17 @@ export function createWallet(ctx) {
     if (!Number.isInteger(amount) || amount < config.minWithdraw) throw new MoneyError('bad_amount', 'Minimum withdrawal is $5.00');
     const fee = withdrawFeeOf(amount);
     const net = amount - fee;
-    const held = !!db.get('SELECT review FROM users WHERE id = ?', user.id)?.review;
-    const id = db.tx(() => {
-      const r = db.run(
-        'INSERT INTO withdrawals (user_id, coin, address, amount, fee, net, coin_amount, status, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
-        user.id, coin, address, amount, fee, net, toCoin(net, coin), held ? 'review' : 'processing', now(),
-      );
-      const wid = Number(r.lastInsertRowid);
-      money.userEntry(user.id, -amount, 'withdrawal', `withdrawal:${wid}`, `${toCoin(net, coin)} ${coin} to ${address.slice(0, 10)}...`);
-      return wid;
+    const id = await db.nextId('withdrawals');
+    const held = await db.tx(async () => {
+      const u = await db.users.findOne({ _id: user.id }, { projection: { review: 1, status: 1 } });
+      if (u.status !== 'active') throw new MoneyError('suspended', 'Account suspended');
+      const review = !!u.review;
+      await db.withdrawals.insert({
+        _id: id, user_id: user.id, coin, address, amount, fee, net, coin_amount: toCoin(net, coin),
+        status: review ? 'review' : 'processing', txid: null, note: null, created_at: now(), completed_at: null,
+      });
+      await money.userEntry(user.id, -amount, 'withdrawal', `withdrawal:${id}`, `${toCoin(net, coin)} ${coin} to ${address.slice(0, 10)}...`);
+      return review;
     });
     if (!held) scheduleWithdraw(id);
     hub.pushBalance(user.id);
@@ -133,46 +138,54 @@ export function createWallet(ctx) {
   }
 
   function scheduleWithdraw(id) {
-    setTimeout(() => completeWithdraw(id), config.withdrawProcessMs).unref?.();
+    setTimeout(() => ctx.track(completeWithdraw(id).catch((e) => console.error('withdrawal', id, e.message))), config.withdrawProcessMs).unref?.();
   }
 
-  function completeWithdraw(id) {
+  async function completeWithdraw(id) {
     if (ctx.closed) return;
-    const w = db.get('SELECT * FROM withdrawals WHERE id = ?', id);
+    const w = await db.withdrawals.findOne({ _id: id });
     if (!w || (w.status !== 'processing' && w.status !== 'review')) return;
-    const u = db.get('SELECT status FROM users WHERE id = ?', w.user_id);
+    const u = await db.users.findOne({ _id: w.user_id }, { projection: { status: 1 } });
     if (u.status !== 'active') return;
-    db.tx(() => {
-      db.run("UPDATE withdrawals SET status = 'completed', txid = ?, completed_at = ? WHERE id = ?", txid(), now(), id);
-      money.house(w.fee, 'withdraw_fee', `withdrawal:${id}`);
+    const done = await db.tx(async () => {
+      const r = await db.withdrawals.update(
+        { _id: id, status: { $in: ['processing', 'review'] } },
+        { $set: { status: 'completed', txid: txid(), completed_at: now() } },
+      );
+      if (!r.modifiedCount) return false;
+      await money.house(w.fee, 'withdraw_fee', `withdrawal:${id}`);
+      return true;
     });
-    hub.toUser(w.user_id, { t: 'wallet', withdrawal: withdrawalRow(id) });
+    if (done) hub.toUser(w.user_id, { t: 'wallet', withdrawal: await withdrawalRow(id) });
   }
 
   // Held withdrawals of an account that was cleared go out; for a suspended
   // account they are forfeited.
-  function releaseHeld(userId) {
-    for (const w of db.all("SELECT id FROM withdrawals WHERE user_id = ? AND status = 'review'", userId)) {
-      db.run("UPDATE withdrawals SET status = 'processing' WHERE id = ?", w.id);
+  async function releaseHeld(userId) {
+    for (const w of await db.withdrawals.find({ user_id: userId, status: 'review' }, { projection: { _id: 1 } })) {
+      await db.withdrawals.update({ _id: w.id, status: 'review' }, { $set: { status: 'processing' } });
       scheduleWithdraw(w.id);
     }
   }
-  function forfeitHeld(userId) {
-    for (const w of db.all("SELECT * FROM withdrawals WHERE user_id = ? AND status IN ('review','processing')", userId)) {
-      db.run("UPDATE withdrawals SET status = 'rejected', note = 'Account suspended', completed_at = ? WHERE id = ?", now(), w.id);
-      money.house(w.amount, 'forfeit', `withdrawal:${w.id}`);
+  async function forfeitHeld(userId) {
+    for (const w of await db.withdrawals.find({ user_id: userId, status: { $in: ['review', 'processing'] } })) {
+      await db.withdrawals.update({ _id: w.id }, { $set: { status: 'rejected', note: 'Account suspended', completed_at: now() } });
+      await money.house(w.amount, 'forfeit', `withdrawal:${w.id}`);
     }
   }
 
-  const depositRow = (id) => db.get('SELECT id, coin, amount, coin_amount, confirmations, required, status, txid, created_at, credited_at FROM deposits WHERE id = ?', id);
-  const withdrawalRow = (id) => db.get('SELECT id, coin, address, amount, fee, net, coin_amount, status, txid, created_at, completed_at FROM withdrawals WHERE id = ?', id);
+  const DEPOSIT_FIELDS = { coin: 1, amount: 1, coin_amount: 1, confirmations: 1, required: 1, status: 1, txid: 1, created_at: 1, credited_at: 1 };
+  const WITHDRAWAL_FIELDS = { coin: 1, address: 1, amount: 1, fee: 1, net: 1, coin_amount: 1, status: 1, txid: 1, created_at: 1, completed_at: 1 };
+  const depositRow = (id) => db.deposits.findOne({ _id: id }, { projection: DEPOSIT_FIELDS });
+  const withdrawalRow = (id) => db.withdrawals.findOne({ _id: id }, { projection: WITHDRAWAL_FIELDS });
 
-  function overview(userId) {
-    return {
-      deposits: db.all('SELECT id, coin, amount, coin_amount, confirmations, required, status, txid, created_at FROM deposits WHERE user_id = ? ORDER BY id DESC LIMIT 50', userId),
-      withdrawals: db.all('SELECT id, coin, address, amount, fee, net, coin_amount, status, txid, created_at FROM withdrawals WHERE user_id = ? ORDER BY id DESC LIMIT 50', userId),
-      ledger: db.all('SELECT id, kind, amount, balance_after, ref, note, created_at FROM ledger WHERE user_id = ? ORDER BY id DESC LIMIT 100', userId),
-    };
+  async function overview(userId) {
+    const [deposits, withdrawals, ledger] = await Promise.all([
+      db.deposits.find({ user_id: userId }, { projection: DEPOSIT_FIELDS, sort: { _id: -1 }, limit: 50 }),
+      db.withdrawals.find({ user_id: userId }, { projection: WITHDRAWAL_FIELDS, sort: { _id: -1 }, limit: 50 }),
+      db.ledger.find({ user_id: userId }, { projection: { kind: 1, amount: 1, balance_after: 1, ref: 1, note: 1, created_at: 1 }, sort: { _id: -1 }, limit: 100 }),
+    ]);
+    return { deposits, withdrawals, ledger };
   }
 
   return { address, testDeposit, withdraw, overview, resumePending, releaseHeld, forfeitHeld, completeWithdraw };

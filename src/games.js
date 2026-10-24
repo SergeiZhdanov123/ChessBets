@@ -41,6 +41,7 @@ export class LiveGame {
     this.timers = {};
     this.gone = {};
     this.chat = [];
+    this.writes = Promise.resolve();
   }
 
   side(color) { return color === 'w' ? this.white : this.black; }
@@ -94,6 +95,14 @@ export class LiveGame {
   }
 
   broadcast(msg) { this.mgr.hub.toGame(this.id, msg); }
+
+  // Database writes for one game go out one at a time, in order.
+  queue(job) {
+    const p = this.writes.then(job);
+    this.writes = p.catch((err) => { if (!this.mgr.closed) console.error('game write failed', this.id, err.message); });
+    this.mgr.track(this.writes);
+    return p;
+  }
 
   start() {
     this.mgr.persistNew(this);
@@ -234,18 +243,19 @@ export class LiveGame {
   }
 
   // { result, reason } for a finished game, { status: 'aborted' } for no game.
+  // The game stops at once; the returned promise settles once the money has
+  // moved and both players have been told.
   end({ result = null, reason, status = 'finished', fairplay = null }) {
-    if (this.status !== 'active' || this.mgr.closed) return;
+    if (this.status !== 'active' || this.mgr.closed) return this.ended || Promise.resolve();
     this.status = status;
     this.result = result;
     this.reason = reason;
     for (const t of Object.values(this.timers)) clearTimeout(t);
     const now = Date.now();
+    this.endedAt = now;
     if (this.ply >= 2) this.clocks[this.turn] = Math.max(0, this.clocks[this.turn] - (now - this.turnStartedAt));
-    this.settlement = this.mgr.settle(this, fairplay);
-    this.mgr.persistEnd(this);
-    this.broadcast((c) => ({ t: 'end', id: this.id, game: this.snapshot(c.userId) }));
-    this.mgr.onEnded(this);
+    this.ended = this.mgr.finish(this, fairplay);
+    return this.ended;
   }
 }
 
@@ -257,6 +267,7 @@ export function createGames(ctx) {
   const mgr = {
     hub,
     live,
+    track: (p) => ctx.track(p),
     get closed() { return !!ctx.closed; },
     get fairplay() { return ctx.fairplay; },
 
@@ -270,8 +281,7 @@ export function createGames(ctx) {
     createHuman(a, b) {
       const [white, black] = Math.random() < 0.5 ? [a, b] : [b, a];
       const g = new LiveGame(mgr, { kind: 'human', tc: a.tc, stake: a.stake, white, black });
-      money.moveHold(white.holdId, 'game', `game:${g.id}`);
-      money.moveHold(black.holdId, 'game', `game:${g.id}`);
+      g.queue(() => money.moveHolds([white.holdId, black.holdId], 'game', `game:${g.id}`));
       live.set(g.id, g);
       byUser.set(white.userId, g.id);
       byUser.set(black.userId, g.id);
@@ -279,11 +289,11 @@ export function createGames(ctx) {
       return g;
     },
 
-    createBot(user, botId, stake, colorPref, net = {}) {
+    async createBot(user, botId, stake, colorPref, net = {}) {
       if (!BOTS[botId]) throw Object.assign(new Error('Unknown bot'), { status: 400 });
       const color = colorPref === 'w' || colorPref === 'b' ? colorPref : Math.random() < 0.5 ? 'w' : 'b';
       const id = newId();
-      const holdId = money.hold(user.id, stake, 'game', `game:${id}`);
+      const holdId = await money.hold(user.id, stake, 'game', `game:${id}`);
       const human = { userId: user.id, username: user.username, holdId, ip: net.ip, device: net.device };
       const bot = { bot: botId };
       const g = new LiveGame(mgr, { id, kind: 'bot', tc: config.botMinutes, stake, white: color === 'w' ? human : bot, black: color === 'b' ? human : bot });
@@ -293,94 +303,111 @@ export function createGames(ctx) {
       return g;
     },
 
-    // Money moves for a finished or aborted game. Runs in one transaction.
-    settle(g, fairplay) {
-      return db.tx(() => {
-        const ref = `game:${g.id}`;
-        const seats = ['w', 'b'].map((c) => ({ c, ...g.side(c) })).filter((s) => s.userId);
-        const out = { rake: 0, w: 0, b: 0 };
-        if (g.status === 'aborted') {
-          for (const s of seats) out[s.c] = money.release(s.holdId, 'stake_return');
+    // Money moves for a finished or aborted game, and the final game record,
+    // in one transaction.
+    async finish(g, fairplay) {
+      try {
+        g.settlement = await g.queue(() => db.tx(async () => {
+          const out = await mgr.settle(g, fairplay);
+          await db.games.replace({ _id: g.id }, mgr.doc(g, out), { upsert: true });
           return out;
-        }
-        for (const s of seats) money.consume(s.holdId);
-        const winner = g.result === '1-0' ? 'w' : g.result === '0-1' ? 'b' : null;
+        }));
+      } catch (err) {
+        console.error('settlement failed', g.id, err.message);
+        g.settlement = null;
+      }
+      g.broadcast((c) => ({ t: 'end', id: g.id, game: g.snapshot(c.userId) }));
+      await mgr.onEnded(g);
+    },
 
-        if (g.kind === 'bot') {
-          const s = seats[0];
-          if (winner === s.c) {
-            out[s.c] = g.stake * 2;
-            money.userEntry(s.userId, g.stake * 2, 'win', ref);
-            money.house(-g.stake, 'bot_loss', ref);
-          } else if (!winner) {
-            out[s.c] = g.stake;
-            money.userEntry(s.userId, g.stake, 'stake_return', ref, 'Draw');
-          } else {
-            money.house(g.stake, 'bot_win', ref);
-          }
-          return out;
-        }
-
-        const p = humanPayouts(g.stake);
-        if (fairplay) {
-          // Game stopped by fair play: the honest player gets the whole pot,
-          // no rake. The cheater's stake is gone.
-          const honest = other(fairplay.color);
-          out[honest] = p.pot;
-          money.userEntry(g.side(honest).userId, p.pot, 'win', ref, 'Opponent removed for fair play');
-          return out;
-        }
-        if (winner) {
-          out[winner] = p.win;
-          out.rake = p.rake;
-          money.userEntry(g.side(winner).userId, p.win, 'win', ref);
-        } else {
-          for (const s of seats) { out[s.c] = p.draw; money.userEntry(s.userId, p.draw, 'draw', ref); }
-          out.rake = p.pot - p.draw * 2;
-        }
-        money.house(out.rake, 'rake', ref);
+    async settle(g, fairplay) {
+      const ref = `game:${g.id}`;
+      const seats = ['w', 'b'].map((c) => ({ c, ...g.side(c) })).filter((s) => s.userId);
+      const out = { rake: 0, w: 0, b: 0 };
+      if (g.status === 'aborted') {
+        for (const s of seats) out[s.c] = await money.release(s.holdId, 'stake_return');
         return out;
-      });
+      }
+      for (const s of seats) await money.consume(s.holdId);
+      const winner = g.result === '1-0' ? 'w' : g.result === '0-1' ? 'b' : null;
+
+      if (g.kind === 'bot') {
+        const s = seats[0];
+        if (winner === s.c) {
+          out[s.c] = g.stake * 2;
+          await money.userEntry(s.userId, g.stake * 2, 'win', ref);
+          await money.house(-g.stake, 'bot_loss', ref);
+        } else if (!winner) {
+          out[s.c] = g.stake;
+          await money.userEntry(s.userId, g.stake, 'stake_return', ref, 'Draw');
+        } else {
+          await money.house(g.stake, 'bot_win', ref);
+        }
+        return out;
+      }
+
+      const p = humanPayouts(g.stake);
+      if (fairplay) {
+        // Game stopped by fair play: the honest player gets the whole pot,
+        // no rake. The cheater's stake is gone.
+        const honest = other(fairplay.color);
+        out[honest] = p.pot;
+        await money.userEntry(g.side(honest).userId, p.pot, 'win', ref, 'Opponent removed for fair play');
+        return out;
+      }
+      if (winner) {
+        out[winner] = p.win;
+        out.rake = p.rake;
+        await money.userEntry(g.side(winner).userId, p.win, 'win', ref);
+      } else {
+        for (const s of seats) { out[s.c] = p.draw; await money.userEntry(s.userId, p.draw, 'draw', ref); }
+        out.rake = p.pot - p.draw * 2;
+      }
+      await money.house(out.rake, 'rake', ref);
+      return out;
+    },
+
+    // The stored form of a game.
+    doc(g, settlement = null) {
+      const winner = g.result === '1-0' ? 'w' : g.result === '0-1' ? 'b' : null;
+      return {
+        _id: g.id, kind: g.kind, tc: g.tc, stake: g.stake,
+        white_id: g.white.userId ?? null, black_id: g.black.userId ?? null,
+        white_name: g.white.username ?? null, black_name: g.black.username ?? null,
+        bot: g.white.bot || g.black.bot || null,
+        status: g.status, result: g.result ?? null, reason: g.reason ?? null,
+        winner_id: winner ? g.side(winner).userId ?? null : null,
+        moves: g.moves, fen: g.chess.fen(), ply: g.ply,
+        rake: settlement?.rake ?? 0, payout_white: settlement?.w ?? 0, payout_black: settlement?.b ?? 0,
+        white_ip: g.white.ip ?? null, black_ip: g.black.ip ?? null, white_device: g.white.device ?? null, black_device: g.black.device ?? null,
+        created_at: g.createdAt, ended_at: g.endedAt ?? null,
+      };
     },
 
     persistNew(g) {
-      db.run(
-        `INSERT INTO games (id, kind, tc, stake, white_id, black_id, bot, status, fen, white_ip, black_ip, white_device, black_device, created_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        g.id, g.kind, g.tc, g.stake, g.white.userId ?? null, g.black.userId ?? null, g.white.bot || g.black.bot || null,
-        'active', g.chess.fen(), g.white.ip ?? null, g.black.ip ?? null, g.white.device ?? null, g.black.device ?? null, g.createdAt,
-      );
+      g.queue(() => db.games.insert({ ...mgr.doc(g), status: 'active', result: null, reason: null, ended_at: null }));
     },
+    // A burst of moves collapses into one write of the latest state.
     persistMoves(g) {
-      db.run('UPDATE games SET moves = ?, fen = ? WHERE id = ?', JSON.stringify(g.moves), g.chess.fen(), g.id);
-    },
-    persistEnd(g) {
-      const winnerColor = g.result === '1-0' ? 'w' : g.result === '0-1' ? 'b' : null;
-      db.run(
-        'UPDATE games SET status = ?, result = ?, reason = ?, winner_id = ?, moves = ?, fen = ?, rake = ?, payout_white = ?, payout_black = ?, ended_at = ? WHERE id = ?',
-        g.status, g.result, g.reason, winnerColor ? g.side(winnerColor).userId ?? null : null, JSON.stringify(g.moves), g.chess.fen(),
-        g.settlement.rake, g.settlement.w, g.settlement.b, Date.now(), g.id,
-      );
+      if (g.movesQueued) return;
+      g.movesQueued = true;
+      g.queue(() => {
+        g.movesQueued = false;
+        if (g.status !== 'active') return; // the final record is written by finish()
+        return db.games.update({ _id: g.id }, { $set: { moves: g.moves, fen: g.chess.fen(), ply: g.ply } });
+      });
     },
 
-    onEnded(g) {
+    async onEnded(g) {
       for (const c of ['w', 'b']) {
         const s = g.side(c);
         if (s.userId) { byUser.delete(s.userId); hub.pushBalance(s.userId); }
       }
       setTimeout(() => live.delete(g.id), 10 * 60_000).unref?.();
-      if (g.status === 'finished') {
-        hub.feed(mgr.feedRow(g.id));
-        ctx.enforcement?.gameEnded(g);
-        ctx.fairplay?.finishGame(g).catch((err) => console.error('fair play analysis failed', g.id, err.message));
-      } else {
-        ctx.fairplay?.live.delete(g.id);
-      }
-    },
-
-    feedRow(id) {
-      const r = db.get(`SELECT g.*, w.username wn, b.username bn FROM games g LEFT JOIN users w ON w.id = g.white_id LEFT JOIN users b ON b.id = g.black_id WHERE g.id = ?`, id);
-      return r ? feedShape(r) : null;
+      if (g.status !== 'finished') { ctx.fairplay?.live.delete(g.id); return; }
+      if (g.settlement) hub.feed(feedShape({ id: g.id, ...mgr.doc(g, g.settlement) }));
+      ctx.track(ctx.fairplay?.finishGame(g).catch((err) => console.error('fair play analysis failed', g.id, err.message)));
+      await ctx.enforcement?.gameEnded(g).catch((err) => console.error('game checks failed', g.id, err.message));
     },
 
     // ---- bots ----
@@ -433,12 +460,13 @@ export function createGames(ctx) {
 
     // After a restart nothing in memory survived. Games that were in progress
     // are voided and every open stake goes back to its owner.
-    recover() {
-      const stale = db.all("SELECT id FROM games WHERE status = 'active'");
-      for (const g of stale) db.run("UPDATE games SET status = 'aborted', reason = 'server-restart', ended_at = ? WHERE id = ?", Date.now(), g.id);
+    async recover() {
+      const stale = await db.games.updateMany({ status: 'active' }, { $set: { status: 'aborted', reason: 'server-restart', ended_at: Date.now() } });
       let n = 0;
-      for (const h of db.all("SELECT id FROM holds WHERE status = 'held'")) { money.release(h.id, 'stake_return'); n++; }
-      return { games: stale.length, holds: n };
+      for (const h of await db.holds.find({ status: 'held' }, { projection: { _id: 1 } })) {
+        if (await money.release(h.id, 'stake_return')) n++;
+      }
+      return { games: stale.modifiedCount, holds: n };
     },
 
     shutdown() {
@@ -453,7 +481,7 @@ export function feedShape(r) {
   const youWin = (c) => (r.result === '1-0' && c === 'w') || (r.result === '0-1' && c === 'b');
   const rows = [];
   for (const c of ['w', 'b']) {
-    const name = c === 'w' ? r.wn : r.bn;
+    const name = c === 'w' ? r.white_name : r.black_name;
     if (!name) continue;
     rows.push({
       game: r.id, user: name, kind: r.kind, tc: r.tc, bot: r.bot, stake: r.stake,

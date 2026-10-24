@@ -301,17 +301,17 @@ export class FairPlay {
       if (!userId) continue;
       const current = scorePlayer(rows, color);
       if (current.verdict !== 'engine-like' && current.verdict !== 'suspicious') continue;
-      const account = accountEvidence([current, ...this.history(userId)]);
+      const account = accountEvidence([current, ...(await this.history(userId))]);
       if (account.evidence >= MODEL.liveInterveneAt) {
-        this.enforce.intervene(game, color, `Live check: ${describe(current)}`);
+        await this.enforce.intervene(game, color, `Live check: ${describe(current)}`);
         return;
       }
     }
   }
 
-  history(userId) {
-    return this.db.all('SELECT metrics FROM fair_play_reports WHERE user_id = ? ORDER BY id DESC LIMIT ?', userId, MODEL.historyGames)
-      .map((r) => JSON.parse(r.metrics));
+  async history(userId) {
+    const rows = await this.db.fair_play_reports.find({ user_id: userId }, { projection: { metrics: 1 }, sort: { created_at: -1 }, limit: MODEL.historyGames });
+    return rows.map((r) => r.metrics);
   }
 
   // Full pass when a game ends. Returns the reports written.
@@ -333,17 +333,18 @@ export class FairPlay {
       if (!side.userId) continue;
       const report = scorePlayer(rows, color);
       report.summary = describe(report);
-      this.db.run(
-        `INSERT OR REPLACE INTO fair_play_reports (game_id, user_id, evidence, verdict, metrics, created_at) VALUES (?,?,?,?,?,?)`,
-        game.id, side.userId, report.evidence, report.verdict, JSON.stringify(report), Date.now(),
+      await this.db.fair_play_reports.replace(
+        { game_id: game.id, user_id: side.userId },
+        { game_id: game.id, user_id: side.userId, evidence: report.evidence, verdict: report.verdict, metrics: report, created_at: Date.now() },
+        { upsert: true },
       );
       out.push({ userId: side.userId, report });
       if (game.kind !== 'human') continue; // bot games are handled by the bot-win rule
-      const account = accountEvidence(this.history(side.userId));
+      const account = accountEvidence(await this.history(side.userId));
       const action = decide(report, account);
       const why = `${describe(report)} Account evidence ${account.evidence} over ${account.games} games.`;
-      if (action === 'suspend') this.enforce.suspend(side.userId, why, game.id);
-      else if (action === 'review') this.enforce.review(side.userId, why, game.id);
+      if (action === 'suspend') await this.enforce.suspend(side.userId, why, game.id);
+      else if (action === 'review') await this.enforce.review(side.userId, why, game.id);
     }
     return out;
   }

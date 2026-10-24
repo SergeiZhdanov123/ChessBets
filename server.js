@@ -1,15 +1,23 @@
 // ChessBets entry point: `node server.js`
-// node:sqlite still prints an ExperimentalWarning on Node 22; it is noise.
-const emit = process.emitWarning;
-process.emitWarning = (w, ...rest) => {
-  if (String(w?.message || w).includes('SQLite')) return;
-  return emit.call(process, w, ...rest);
-};
+import fs from 'node:fs';
+
+// Local settings (MONGODB_URI and friends) live in .env. Variables already
+// set in the environment, as on Render, take precedence.
+if (fs.existsSync('.env')) process.loadEnvFile('.env');
 
 const { config } = await import('./src/config.js');
 const { createApp } = await import('./src/app.js');
 
-const { server, ctx, recovered } = await createApp();
+let started;
+try {
+  started = await createApp();
+} catch (err) {
+  console.error(`Could not start: ${err.message}`);
+  if (/auth/i.test(err.message)) console.error('Check the username and password in MONGODB_URI.');
+  if (err.name === 'MongoServerSelectionError') console.error('MongoDB did not answer. On Atlas, check Network Access allows this machine (0.0.0.0/0 for Render).');
+  process.exit(1);
+}
+const { server, ctx, recovered } = started;
 if (recovered.games || recovered.holds) {
   console.log(`Recovered after restart: voided ${recovered.games} unfinished game(s), returned ${recovered.holds} open stake(s).`);
 }
@@ -21,7 +29,7 @@ server.on('error', (err) => {
 });
 
 server.listen(config.port, config.host, () => {
-  console.log(`ChessBets (paper money) running at http://localhost:${config.port}`);
+  console.log(`ChessBets (paper money) running at http://localhost:${config.port} (database "${config.mongoDb}")`);
 });
 
 let closing = false;

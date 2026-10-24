@@ -1,7 +1,7 @@
 // End-to-end check of the fair-play pipeline with real Stockfish games.
 // One side relays engine moves (with steady timing and tab switching), the
 // other plays like a strong human: usually a good move, not always the best.
-import './helpers.js';
+import { testMongo, testDbName } from './helpers.js';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { Chess } from 'chess.js';
@@ -53,7 +53,7 @@ async function makeGame(cheatColor, plies = 90) {
 }
 
 async function series(maxGames) {
-  const db = openDb(':memory:');
+  const db = await openDb({ uri: await testMongo(), name: testDbName('fp') });
   const actions = [];
   const fp = new FairPlay({
     db, pool: analysis, nodes: Number(process.env.FP_NODES || 400_000),
@@ -89,7 +89,8 @@ async function series(maxGames) {
   const humanAcct = accountEvidence(humanReports);
   console.log(`account evidence: cheater ${cheatAcct.evidence}, human ${humanAcct.evidence}; cheater reviewed after game ${reviewedAfter}, suspended after game ${suspendedAfter}`);
 
-  db.close();
+  await db.drop();
+  await db.close();
   return { reviewedAfter, suspendedAfter, actions, humanAcct, humanReports, cheatReports, human };
 }
 

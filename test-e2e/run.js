@@ -7,16 +7,18 @@ import path from 'node:path';
 import net from 'node:net';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright-core';
+import { testMongo, testDbName } from '../test/mongo.js';
 
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-e2e-'));
 const port = await new Promise((r) => { const s = net.createServer().listen(0, () => { const p = s.address().port; s.close(() => r(p)); }); });
 const base = `http://127.0.0.1:${port}`;
 
+const mongoUri = await testMongo();
 const server = spawn(process.execPath, ['server.js'], {
   cwd: root,
   env: {
-    ...process.env, PORT: String(port), HOST: '127.0.0.1', DB_PATH: path.join(dir, 'e2e.db'), ADMIN_USERS: 'e2eadmin',
+    ...process.env, PORT: String(port), HOST: '127.0.0.1', MONGODB_URI: mongoUri, MONGODB_DB: testDbName('e2e'), ADMIN_USERS: 'e2eadmin',
     DEPOSIT_CONFIRM_MS: '150', WITHDRAW_PROCESS_MS: '200', BOT_MOVE_SCALE: '0.2', REGISTER_PER_HOUR: '1000', ANALYSIS_NODES: '50000',
   },
   stdio: ['ignore', 'pipe', 'pipe'],

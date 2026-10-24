@@ -7,7 +7,26 @@ npm install
 node server.js          # http://localhost:3000
 ```
 
-Needs Node 22.13+ and a native Stockfish on the PATH (`brew install stockfish`). Set `STOCKFISH_PATH` if it lives elsewhere.
+Needs:
+
+- Node 22.13+.
+- A native Stockfish on the PATH (`brew install stockfish`). Set `STOCKFISH_PATH` if it lives elsewhere.
+- A MongoDB connection string in `MONGODB_URI`. Locally, put it in a `.env` file next to `server.js`:
+
+```
+MONGODB_URI=mongodb+srv://<user>:<password>@cluster0.xxxxx.mongodb.net
+MONGODB_DB=chessbets
+```
+
+`.env` is git-ignored. Variables set in the real environment win over the file.
+
+MongoDB has to be a replica set, because money moves use transactions. Every Atlas cluster is one, the free M0 tier included.
+
+### Render
+
+Set `MONGODB_URI` (and `MONGODB_DB` if you want a name other than `chessbets`) under Environment. Nothing needs a disk.
+
+In Atlas, under Network Access, allow `0.0.0.0/0`. Render's free instances don't have fixed outbound IPs.
 
 To make yourself an admin, either start with `ADMIN_USERS=yourname node server.js` or run `npm run make-admin -- yourname` once the account exists.
 
@@ -19,7 +38,7 @@ To make yourself an admin, either start with `ADMIN_USERS=yourname node server.j
 
 **Chat.** Players in a human game can type messages (up to 200 characters, 3 per 5 seconds) or use quick messages. Only the two players receive them. Your messages are green on the right; your opponent's are blue on the left, with a mute toggle.
 
-**Money.** Everything is in integer cents with a double-entry style ledger (`ledger` table, house rows have `user_id NULL`).
+**Money.** Everything is in integer cents with a double-entry style ledger (`ledger` collection; house rows have `user_id: null`). Each money move is one MongoDB transaction, and the server runs them one at a time, so a balance check and the write that depends on it can't interleave with anything else.
 
 | | |
 |---|---|
@@ -92,7 +111,7 @@ src/anticheat.js     fair-play model and analysis service
 src/enforcement.js   review, suspension, refunds, scheduled actions
 src/wallet.js        simulated crypto deposits and withdrawals
 src/money.js         ledger helpers and payout math
-src/db.js            SQLite schema (node:sqlite)
+src/db.js            MongoDB connection, indexes, transactions
 public/              single-page client, no build step
 ```
 
@@ -103,6 +122,8 @@ npm test             # unit, HTTP/WebSocket and real-engine fair-play tests (abo
 npm run test:e2e     # browser flows with the system Chrome (about 1 minute)
 ```
 
+The tests never touch your real database. They start a throwaway one-node replica set with the local `mongod` (`brew install mongodb-community`) in a temp folder. To use another server instead, set `TEST_MONGODB_URI`.
+
 The server tests check after every scenario that each user's ledger sums to their balance and that money is conserved across users, holds and the house.
 
 ## Settings
@@ -110,7 +131,8 @@ The server tests check after every scenario that each user's ledger sums to thei
 | Variable | Default | |
 |---|---|---|
 | `PORT` / `HOST` | 3000 / 0.0.0.0 | |
-| `DB_PATH` | data/chessbets.db | |
+| `MONGODB_URI` | | required |
+| `MONGODB_DB` | chessbets | database name |
 | `ADMIN_USERS` | | comma-separated usernames |
 | `ANALYSIS_NODES` | 500000 | per position, fair-play analysis |
 | `ANALYSIS_ENGINES` / `BOT_ENGINES` / `BOT_THREADS` | 2 / 2 / auto | |
@@ -118,7 +140,7 @@ The server tests check after every scenario that each user's ledger sums to thei
 | `BLOCK_SAME_IP` | off | `1` refuses to pair two accounts on one IP |
 | `REGISTER_PER_HOUR` / `LOGIN_PER_MINUTE` | 5 / 12 | per IP |
 
-On restart, unfinished games are voided and every open stake is returned.
+Live games and the queues live in the server's memory, so run one instance. On restart, unfinished games are voided and every open stake is returned.
 
 ## Credits
 

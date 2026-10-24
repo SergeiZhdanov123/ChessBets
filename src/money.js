@@ -24,59 +24,61 @@ export function humanPayouts(stake) {
 export function createMoney(db) {
   const now = () => Date.now();
 
+  // Change a balance and write the ledger row in one transaction. A debit
+  // only applies if the balance covers it.
   function userEntry(userId, amount, kind, ref = null, note = null) {
     if (!Number.isInteger(amount)) throw new Error(`non-integer amount ${amount}`);
-    const u = db.get('SELECT balance FROM users WHERE id = ?', userId);
-    if (!u) throw new MoneyError('no_user', 'Account not found');
-    const after = u.balance + amount;
-    if (after < 0) throw new MoneyError('insufficient', 'Insufficient balance');
-    db.run('UPDATE users SET balance = ? WHERE id = ?', after, userId);
-    db.run('INSERT INTO ledger (user_id, kind, amount, balance_after, ref, note, created_at) VALUES (?,?,?,?,?,?,?)',
-      userId, kind, amount, after, ref, note, now());
-    return after;
+    return db.tx(async () => {
+      const filter = amount < 0 ? { _id: userId, balance: { $gte: -amount } } : { _id: userId };
+      const u = await db.users.modify(filter, { $inc: { balance: amount } }, { projection: { balance: 1 } });
+      if (!u) {
+        if (!(await db.users.findOne({ _id: userId }, { projection: { _id: 1 } }))) throw new MoneyError('no_user', 'Account not found');
+        throw new MoneyError('insufficient', 'Insufficient balance');
+      }
+      await db.ledger.insert({ user_id: userId, kind, amount, balance_after: u.balance, ref, note, created_at: now() });
+      return u.balance;
+    });
   }
 
-  function houseEntry(amount, kind, ref = null, note = null) {
+  async function houseEntry(amount, kind, ref = null, note = null) {
     if (!amount) return;
-    db.run('INSERT INTO ledger (user_id, kind, amount, balance_after, ref, note, created_at) VALUES (NULL,?,?,NULL,?,?,?)',
-      kind, amount, ref, note, now());
+    await db.ledger.insert({ user_id: null, kind, amount, balance_after: null, ref, note, created_at: now() });
   }
 
   return {
-    credit: (userId, amount, kind, ref, note) => db.tx(() => userEntry(userId, amount, kind, ref, note)),
-    debit: (userId, amount, kind, ref, note) => db.tx(() => userEntry(userId, -amount, kind, ref, note)),
+    credit: (userId, amount, kind, ref, note) => userEntry(userId, amount, kind, ref, note),
+    debit: (userId, amount, kind, ref, note) => userEntry(userId, -amount, kind, ref, note),
     house: houseEntry,
-    balance: (userId) => db.get('SELECT balance FROM users WHERE id = ?', userId)?.balance ?? 0,
+    balance: async (userId) => (await db.users.findOne({ _id: userId }, { projection: { balance: 1 } }))?.balance ?? 0,
 
     // Take a stake out of the balance and park it until the game settles.
     hold(userId, amount, kind, ref) {
-      return db.tx(() => {
-        userEntry(userId, -amount, 'stake', ref);
-        const r = db.run('INSERT INTO holds (user_id, amount, kind, ref, created_at) VALUES (?,?,?,?,?)', userId, amount, kind, ref, now());
-        return Number(r.lastInsertRowid);
+      return db.tx(async () => {
+        await userEntry(userId, -amount, 'stake', ref);
+        const id = await db.nextId('holds');
+        await db.holds.insert({ _id: id, user_id: userId, amount, kind, ref, status: 'held', created_at: now(), closed_at: null });
+        return id;
       });
     },
-    moveHold(holdId, kind, ref) {
-      db.run("UPDATE holds SET kind = ?, ref = ? WHERE id = ? AND status = 'held'", kind, ref, holdId);
+    moveHolds(holdIds, kind, ref) {
+      return db.holds.updateMany({ _id: { $in: holdIds }, status: 'held' }, { $set: { kind, ref } });
     },
     release(holdId, kind = 'stake_return') {
-      return db.tx(() => {
-        const h = db.get("SELECT * FROM holds WHERE id = ? AND status = 'held'", holdId);
+      return db.tx(async () => {
+        const h = await db.holds.modify({ _id: holdId, status: 'held' }, { $set: { status: 'released', closed_at: now() } });
         if (!h) return 0;
-        db.run("UPDATE holds SET status = 'released', closed_at = ? WHERE id = ?", now(), holdId);
-        userEntry(h.user_id, h.amount, kind, h.ref);
+        await userEntry(h.user_id, h.amount, kind, h.ref);
         return h.amount;
       });
     },
     // The stake is consumed by the game; payouts are separate credits.
-    consume(holdId) {
-      const h = db.get("SELECT * FROM holds WHERE id = ? AND status = 'held'", holdId);
+    async consume(holdId) {
+      const h = await db.holds.modify({ _id: holdId, status: 'held' }, { $set: { status: 'settled', closed_at: now() } });
       if (!h) throw new Error(`hold ${holdId} is not open`);
-      db.run("UPDATE holds SET status = 'settled', closed_at = ? WHERE id = ?", now(), holdId);
       return h.amount;
     },
-    openHolds: (userId) => db.all("SELECT * FROM holds WHERE user_id = ? AND status = 'held'", userId),
-    heldTotal: (userId) => db.get("SELECT COALESCE(SUM(amount),0) s FROM holds WHERE user_id = ? AND status = 'held'", userId).s,
+    openHolds: (userId) => db.holds.find({ user_id: userId, status: 'held' }),
+    heldTotal: (userId) => db.holds.sum('$amount', { user_id: userId, status: 'held' }),
     userEntry,
   };
 }

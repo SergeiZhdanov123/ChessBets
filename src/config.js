@@ -7,7 +7,8 @@ const HOUR = 3600_000;
 export const config = {
   port: num(env.PORT, 3000),
   host: env.HOST || '0.0.0.0',
-  dbPath: env.DB_PATH || 'data/chessbets.db',
+  mongoUri: env.MONGODB_URI || '',
+  mongoDb: env.MONGODB_DB || 'chessbets',
   prod: env.NODE_ENV === 'production',
 
   // Money. Everything is integer cents.

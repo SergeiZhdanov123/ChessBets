@@ -22,34 +22,59 @@ export function createMatchmaker(ctx) {
     countsTimer = setTimeout(() => { countsTimer = null; hub.all({ t: 'queues', counts: counts() }); }, 120);
   }
 
+  // Placing the stake takes a database round trip. `joining` remembers who is
+  // mid-join, so a leave (or a suspension) in that window still wins.
+  const joining = new Map();
+
   function join(user, tc, stake, net = {}) {
-    tc = Number(tc); stake = Number(stake);
-    const q = queues.get(queueKey(tc, stake));
-    if (!q) throw new MoneyError('bad_queue', 'No such queue');
-    if (user.status !== 'active') throw new MoneyError('suspended', 'Account suspended');
-    if (ctx.games.activeFor(user.id)) throw new MoneyError('in_game', 'Finish your current game first');
-    const current = where.get(user.id);
-    if (current === queueKey(tc, stake)) return { key: current, joinedAt: queues.get(current).get(user.id).joinedAt };
-    if (current) leave(user.id);
-    const holdId = money.hold(user.id, stake, 'queue', `queue:${tc}:${stake}`);
-    const entry = { userId: user.id, username: user.username, tc, stake, holdId, ip: net.ip, device: net.device, joinedAt: Date.now() };
-    q.set(user.id, entry);
-    where.set(user.id, queueKey(tc, stake));
-    hub.pushBalance(user.id);
-    pushCounts();
-    return { key: queueKey(tc, stake), joinedAt: entry.joinedAt };
+    return ctx.userLock(user.id, async () => {
+      tc = Number(tc); stake = Number(stake);
+      const key = queueKey(tc, stake);
+      const q = queues.get(key);
+      if (!q) throw new MoneyError('bad_queue', 'No such queue');
+      if (user.status !== 'active') throw new MoneyError('suspended', 'Account suspended');
+      if (ctx.games.activeFor(user.id)) throw new MoneyError('in_game', 'Finish your current game first');
+      const current = where.get(user.id);
+      if (current === key) return { key, joinedAt: q.get(user.id).joinedAt };
+      if (current) await leave(user.id);
+      const ticket = { cancelled: false };
+      joining.set(user.id, ticket);
+      let holdId;
+      try {
+        holdId = await money.hold(user.id, stake, 'queue', `queue:${tc}:${stake}`);
+      } finally {
+        joining.delete(user.id);
+      }
+      if (ticket.cancelled || ctx.closed || ctx.games.activeFor(user.id)) {
+        await money.release(holdId, 'stake_return');
+        hub.pushBalance(user.id);
+        return { cancelled: true };
+      }
+      const entry = { userId: user.id, username: user.username, tc, stake, holdId, ip: net.ip, device: net.device, joinedAt: Date.now() };
+      q.set(user.id, entry);
+      where.set(user.id, key);
+      hub.pushBalance(user.id);
+      pushCounts();
+      return { key, joinedAt: entry.joinedAt };
+    });
   }
 
-  function leave(userId, why = 'left') {
+  async function leave(userId, why = 'left') {
+    const pending = joining.get(userId);
+    if (pending) {
+      pending.cancelled = true;
+      hub.toUser(userId, { t: 'queue', state: 'left', why });
+      return true;
+    }
     const key = where.get(userId);
     if (!key) return false;
     const entry = queues.get(key).get(userId);
     queues.get(key).delete(userId);
     where.delete(userId);
-    if (entry) money.release(entry.holdId, 'stake_return');
+    pushCounts();
+    if (entry) await money.release(entry.holdId, 'stake_return');
     hub.toUser(userId, { t: 'queue', state: 'left', why });
     hub.pushBalance(userId);
-    pushCounts();
     return true;
   }
 
@@ -64,15 +89,18 @@ export function createMatchmaker(ctx) {
     return true;
   }
 
-  // How often two accounts met in the last day. Used to prefer someone new
-  // when there is a choice, which makes queue sniping harder; it never stops
-  // a pairing outright.
-  function recentMeetings(a, b) {
-    return db.get(
-      `SELECT COUNT(*) n FROM games WHERE kind = 'human' AND created_at > ? AND
-       ((white_id = ? AND black_id = ?) OR (white_id = ? AND black_id = ?))`,
-      Date.now() - 24 * 3600_000, a.userId, b.userId, b.userId, a.userId,
-    ).n;
+  // How often each pair in a queue met in the last day, in one query. Used
+  // to prefer someone new when there is a choice, which makes queue sniping
+  // harder; it never stops a pairing outright.
+  const pairKey = (x, y) => (x < y ? `${x}:${y}` : `${y}:${x}`);
+  async function recentMeetings(ids) {
+    const rows = await db.games.find(
+      { kind: 'human', created_at: { $gt: Date.now() - 24 * 3600_000 }, white_id: { $in: ids }, black_id: { $in: ids } },
+      { projection: { white_id: 1, black_id: 1 } },
+    );
+    const met = new Map();
+    for (const r of rows) { const k = pairKey(r.white_id, r.black_id); met.set(k, (met.get(k) || 0) + 1); }
+    return met;
   }
 
   function shuffle(arr) {
@@ -92,25 +120,34 @@ export function createMatchmaker(ctx) {
       hub.toUser(b.userId, { t: 'matched', id: g.id });
     } catch (err) {
       console.error('match failed', err);
-      money.release(a.holdId); money.release(b.holdId);
-      hub.toUser(a.userId, { t: 'queue', state: 'left', why: 'error' });
-      hub.toUser(b.userId, { t: 'queue', state: 'left', why: 'error' });
-      hub.pushBalance(a.userId); hub.pushBalance(b.userId);
+      for (const e of [a, b]) {
+        money.release(e.holdId).catch(() => {}).then(() => hub.pushBalance(e.userId));
+        hub.toUser(e.userId, { t: 'queue', state: 'left', why: 'error' });
+      }
     }
   }
 
+  // One pass at a time; a call made while one is running waits for it.
+  let ticking = null;
   function tick() {
+    ticking ??= pass().finally(() => { ticking = null; });
+    return ticking;
+  }
+
+  async function pass() {
     for (const q of queues.values()) {
       if (q.size < 2) continue;
       const pool = shuffle([...q.values()]);
+      const met = await recentMeetings(pool.map((e) => e.userId));
+      const here = (e) => q.get(e.userId) === e; // still waiting after the query
       const used = new Set();
       let paired = false;
       for (const a of pool) {
-        if (used.has(a.userId)) continue;
+        if (used.has(a.userId) || !here(a)) continue;
         // Everyone a can play, fewest recent meetings first, random among ties.
         const options = pool
-          .filter((b) => b !== a && !used.has(b.userId) && eligible(a, b))
-          .map((b) => ({ b, met: recentMeetings(a, b) }))
+          .filter((b) => b !== a && !used.has(b.userId) && here(b) && eligible(a, b))
+          .map((b) => ({ b, met: met.get(pairKey(a.userId, b.userId)) || 0 }))
           .sort((x, y) => x.met - y.met);
         if (!options.length) continue;
         const b = options[0].b;
@@ -130,8 +167,13 @@ export function createMatchmaker(ctx) {
     }
   }
 
-  const timer = setInterval(tick, config.matchTickMs);
-  timer.unref?.();
+  let timer = null;
+  const start = () => {
+    clearInterval(timer);
+    timer = setInterval(() => tick().catch((e) => console.error('matchmaker', e.message)), config.matchTickMs);
+    timer.unref?.();
+  };
+  start();
 
   return {
     join, leave, tick, counts,
@@ -141,6 +183,7 @@ export function createMatchmaker(ctx) {
       const e = queues.get(key).get(userId);
       return { key, tc: e.tc, stake: e.stake, joinedAt: e.joinedAt };
     },
+    start,
     stop: () => clearInterval(timer),
   };
 }

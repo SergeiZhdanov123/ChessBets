@@ -1,7 +1,5 @@
-// Shared harness: boots the real app on a random port with an in-memory DB.
-const emit = process.emitWarning;
-process.emitWarning = (w, ...r) => (String(w?.message || w).includes('SQLite') ? undefined : emit.call(process, w, ...r));
-
+// Shared harness: boots the real app on a random port with a fresh database
+// on a throwaway local MongoDB.
 process.env.BOT_MOVE_SCALE ??= '0.05';
 process.env.BOT_ENGINES ??= '1';
 process.env.BOT_THREADS ??= '1';
@@ -16,13 +14,24 @@ process.env.REGISTER_PER_HOUR ??= '100000';
 process.env.LOGIN_PER_MINUTE ??= '100000';
 
 import WebSocket from 'ws';
+import { testMongo, testDbName, dropDb } from './mongo.js';
+
+export { testMongo, testDbName };
 
 export async function boot(extra = {}) {
   const { createApp } = await import('../src/app.js');
-  const app = await createApp({ dbPath: ':memory:', ...extra });
+  const mongoUri = await testMongo();
+  const dbName = extra.dbName || testDbName();
+  const app = await createApp({ mongoUri, dbName, ...extra });
   await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${app.server.address().port}`;
-  return { ...app, base, close: () => app.ctx.close() };
+  return {
+    ...app, base, mongoUri, dbName,
+    close: async ({ keep = false, crash = false } = {}) => {
+      await app.ctx.close({ crash });
+      if (!keep) await dropDb(mongoUri, dbName);
+    },
+  };
 }
 
 export class Client {
@@ -91,17 +100,21 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Sum of each user's ledger must equal their balance, and money is conserved:
 // deposits - withdrawals = user balances + open holds + house net.
-export function checkBooks(db) {
-  for (const u of db.all('SELECT id, balance FROM users')) {
-    const s = db.get('SELECT COALESCE(SUM(amount),0) s FROM ledger WHERE user_id = ?', u.id).s;
+export async function checkBooks(db) {
+  const sums = new Map((await db.ledger.aggregate([
+    { $match: { user_id: { $ne: null } } },
+    { $group: { _id: '$user_id', s: { $sum: '$amount' } } },
+  ])).map((r) => [r._id, r.s]));
+  for (const u of await db.users.find({}, { projection: { balance: 1 } })) {
+    const s = sums.get(u.id) || 0;
     if (s !== u.balance) throw new Error(`user ${u.id}: ledger ${s} != balance ${u.balance}`);
   }
-  const deposits = db.get("SELECT COALESCE(SUM(amount),0) s FROM deposits WHERE status IN ('credited','forfeited')").s;
-  const paidOut = db.get("SELECT COALESCE(SUM(net),0) s FROM withdrawals WHERE status = 'completed'").s;
-  const inFlight = db.get("SELECT COALESCE(SUM(amount),0) s FROM withdrawals WHERE status IN ('processing','review')").s;
-  const balances = db.get('SELECT COALESCE(SUM(balance),0) s FROM users').s;
-  const held = db.get("SELECT COALESCE(SUM(amount),0) s FROM holds WHERE status = 'held'").s;
-  const house = db.get('SELECT COALESCE(SUM(amount),0) s FROM ledger WHERE user_id IS NULL').s;
+  const deposits = await db.deposits.sum('$amount', { status: { $in: ['credited', 'forfeited'] } });
+  const paidOut = await db.withdrawals.sum('$net', { status: 'completed' });
+  const inFlight = await db.withdrawals.sum('$amount', { status: { $in: ['processing', 'review'] } });
+  const balances = await db.users.sum('$balance');
+  const held = await db.holds.sum('$amount', { status: 'held' });
+  const house = await db.ledger.sum('$amount', { user_id: null });
   const lhs = deposits - paidOut - inFlight;
   const rhs = balances + held + house;
   if (lhs !== rhs) throw new Error(`money not conserved: in ${lhs} vs accounted ${rhs} (bal ${balances}, held ${held}, house ${house})`);

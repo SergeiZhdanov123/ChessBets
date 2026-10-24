@@ -1,9 +1,6 @@
 import { boot, Client, sleep, checkBooks } from './helpers.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 
 process.env.FIRST_MOVE_MS = '600';
 process.env.ABANDON_MS_3 = '500';
@@ -85,8 +82,8 @@ test('deposits confirm and credit; withdrawals take 5% and validate addresses', 
   await sleep(120);
   const after1 = await c.req('/api/wallet');
   assert.equal(after1.data.withdrawals[0].status, 'completed');
-  assert.ok(db().get("SELECT 1 FROM ledger WHERE user_id IS NULL AND kind = 'withdraw_fee' AND amount = 100"));
-  checkBooks(db());
+  assert.ok(await db().ledger.findOne({ user_id: null, kind: 'withdraw_fee', amount: 100 }));
+  await checkBooks(db());
 });
 
 test('queue: insufficient funds rejected, leaving returns the stake', async () => {
@@ -102,7 +99,7 @@ test('queue: insufficient funds rejected, leaving returns the stake', async () =
   await a.wait((m) => m.t === 'queue' && m.state === 'left');
   assert.equal(await a.balance(), 1000);
   poor.close(); a.close();
-  checkBooks(db());
+  await checkBooks(db());
 });
 
 test('human game: checkmate pays the pot minus 4% rake', async () => {
@@ -115,8 +112,8 @@ test('human game: checkmate pays the pot minus 4% rake', async () => {
   assert.equal(end.game.you, 'w');
   assert.equal(await g.white.balance(), 10_000 - 500 + 960);
   assert.equal(await g.black.balance(), 10_000 - 500);
-  assert.equal(db().get('SELECT rake FROM games WHERE id = ?', g.id).rake, 40);
-  checkBooks(db());
+  assert.equal((await db().games.findOne({ _id: g.id })).rake, 40);
+  await checkBooks(db());
   a.close(); b.close();
 });
 
@@ -131,7 +128,7 @@ test('human game: draw by agreement still takes the rake from each side', async 
   assert.equal(end.game.reason, 'agreement');
   assert.equal(await a.balance(), 10_000 - 40);
   assert.equal(await b.balance(), 10_000 - 40);
-  checkBooks(db());
+  await checkBooks(db());
   a.close(); b.close();
 });
 
@@ -142,7 +139,7 @@ test('no first move: game aborts and both stakes come back in full', async () =>
   assert.equal(end.game.status, 'aborted');
   assert.equal(await a.balance(), 10_000);
   assert.equal(await b.balance(), 10_000);
-  checkBooks(db());
+  await checkBooks(db());
   a.close(); b.close();
 });
 
@@ -228,17 +225,16 @@ test('two accounts from the same browser are never paired', async () => {
   await sleep(400);
   assert.equal(app.ctx.matchmaker.counts()['10:100'], 2);
   assert.match((await a.wait((m) => m.t === 'queue-note')).note, /same browser/);
-  assert.ok(db().get("SELECT 1 FROM fair_play_events WHERE kind = 'multi_account' AND user_id = ?", b.user.id));
+  assert.ok(await db().fair_play_events.findOne({ kind: 'multi_account', user_id: b.user.id }));
   const c = await player();
   c.send({ t: 'queue-join', tc: 10, stake: 100 });
   const m = await c.wait((x) => x.t === 'matched');
   assert.ok(m.id);
   a.send({ t: 'queue-leave' }); b.send({ t: 'queue-leave' });
   const live = app.ctx.games.get(m.id);
-  live.end({ status: 'aborted', reason: 'aborted' });
-  await sleep(100);
+  await live.end({ status: 'aborted', reason: 'aborted' });
   a.close(); b.close(); c.close();
-  checkBooks(db());
+  await checkBooks(db());
 });
 
 test('several people waiting are all paired, including shared networks and past shared browsers', async () => {
@@ -246,23 +242,23 @@ test('several people waiting are all paired, including shared networks and past 
   const ps = [];
   for (let i = 0; i < 4; i++) ps.push(await player(2000));
   // Two of them once signed in on the same browser, then moved to their own.
-  db().run('INSERT INTO user_devices (user_id, device_id, ip, first_seen, last_seen) VALUES (?,?,?,?,?)', ps[0].user.id, 'f'.repeat(32), '127.0.0.1', Date.now(), Date.now());
-  db().run('INSERT INTO user_devices (user_id, device_id, ip, first_seen, last_seen) VALUES (?,?,?,?,?)', ps[1].user.id, 'f'.repeat(32), '127.0.0.1', Date.now(), Date.now());
+  for (const p of ps.slice(0, 2)) {
+    await db().user_devices.insert({ user_id: p.user.id, device_id: 'f'.repeat(32), ip: '127.0.0.1', first_seen: Date.now(), last_seen: Date.now() });
+  }
   for (const p of ps) p.send({ t: 'queue-join', tc: 3, stake: 500 });
   const ids = await Promise.all(ps.map((p) => p.wait((m) => m.t === 'matched', 4000).then((m) => m.id)));
   assert.equal(new Set(ids).size, 2, 'four players should make two games');
   assert.equal(app.ctx.matchmaker.counts()['3:500'], 0);
-  for (const id of new Set(ids)) app.ctx.games.get(id).end({ status: 'aborted', reason: 'aborted' });
+  for (const id of new Set(ids)) await app.ctx.games.get(id).end({ status: 'aborted', reason: 'aborted' });
   // Just the two who once shared a browser (now on their own): still paired.
   ps[0].send({ t: 'queue-join', tc: 10, stake: 500 });
   ps[1].send({ t: 'queue-join', tc: 10, stake: 500 });
   const m = await ps[0].wait((x) => x.t === 'matched', 4000);
   const live = app.ctx.games.get(m.id);
   assert.deepEqual([live.white.userId, live.black.userId].sort(), [ps[0].user.id, ps[1].user.id].sort());
-  live.end({ status: 'aborted', reason: 'aborted' });
-  await sleep(50);
+  await live.end({ status: 'aborted', reason: 'aborted' });
   ps.forEach((p) => p.close());
-  checkBooks(db());
+  await checkBooks(db());
 });
 
 test('the same two players can keep playing each other', async () => {
@@ -274,9 +270,9 @@ test('the same two players can keep playing each other', async () => {
     await a.wait((m) => m.t === 'end' && m.id === g.id);
     await b.wait((m) => m.t === 'end' && m.id === g.id);
   }
-  assert.equal(db().get("SELECT COUNT(*) n FROM games WHERE status = 'finished' AND (white_id = ? OR black_id = ?)", a.user.id, a.user.id).n, 4);
+  assert.equal(await db().games.count({ status: 'finished', $or: [{ white_id: a.user.id }, { black_id: a.user.id }] }), 4);
   a.close(); b.close();
-  checkBooks(db());
+  await checkBooks(db());
 });
 
 test('with a choice, the matchmaker avoids a repeat opponent', async () => {
@@ -285,24 +281,29 @@ test('with a choice, the matchmaker avoids a repeat opponent', async () => {
   await play(g, ['e4', 'e5']);
   g.white.send({ t: 'resign', id: g.id });
   await a.wait((m) => m.t === 'end'); await b.wait((m) => m.t === 'end');
-  const row = (p) => db().get('SELECT * FROM users WHERE id = ?', p.user.id);
-  for (let trial = 0; trial < 8; trial++) {
-    const c = await player(2000);
-    const before = new Set(app.ctx.games.live.keys());
-    // Join all three and pair synchronously, so the timer can't interleave.
-    for (const p of [a, b, c]) app.ctx.matchmaker.join(row(p), 10, 1000, {});
-    app.ctx.matchmaker.tick();
-    const fresh = [...app.ctx.games.live.values()].filter((x) => !before.has(x.id));
-    assert.equal(fresh.length, 1);
-    const seats = [fresh[0].white.userId, fresh[0].black.userId];
-    assert.ok(seats.includes(c.user.id), `trial ${trial}: paired the two players who just met`);
-    fresh[0].end({ status: 'aborted', reason: 'aborted' });
-    for (const p of [a, b]) app.ctx.matchmaker.leave(p.user.id);
-    db().run('DELETE FROM games WHERE id = ?', fresh[0].id); // keep c's history out of later trials
-    c.close();
+  const row = (p) => db().users.findOne({ _id: p.user.id });
+  // Pair by hand with the timer off, so it can't pair two of them early.
+  app.ctx.matchmaker.stop();
+  try {
+    for (let trial = 0; trial < 8; trial++) {
+      const c = await player(2000);
+      const before = new Set(app.ctx.games.live.keys());
+      for (const p of [a, b, c]) await app.ctx.matchmaker.join(await row(p), 10, 1000, {});
+      await app.ctx.matchmaker.tick();
+      const fresh = [...app.ctx.games.live.values()].filter((x) => !before.has(x.id));
+      assert.equal(fresh.length, 1);
+      const seats = [fresh[0].white.userId, fresh[0].black.userId];
+      assert.ok(seats.includes(c.user.id), `trial ${trial}: paired the two players who just met`);
+      await fresh[0].end({ status: 'aborted', reason: 'aborted' });
+      for (const p of [a, b]) await app.ctx.matchmaker.leave(p.user.id);
+      await db().games.delete({ _id: fresh[0].id }); // keep c's history out of later trials
+      c.close();
+    }
+  } finally {
+    app.ctx.matchmaker.start();
   }
   a.close(); b.close();
-  checkBooks(db());
+  await checkBooks(db());
 });
 
 test('bot game: real engine replies, resigning gives the house the stake', async () => {
@@ -321,8 +322,8 @@ test('bot game: real engine replies, resigning gives the house the stake', async
   a.send({ t: 'resign', id: r.data.id });
   await a.wait((m) => m.t === 'end');
   assert.equal(await a.balance(), 10_000 - 700);
-  assert.ok(db().get("SELECT 1 FROM ledger WHERE user_id IS NULL AND kind = 'bot_win' AND amount = 700"));
-  checkBooks(db());
+  assert.ok(await db().ledger.findOne({ user_id: null, kind: 'bot_win', amount: 700 }));
+  await checkBooks(db());
   a.close();
 });
 
@@ -336,7 +337,7 @@ test('bots never take a draw and re-search when their move would draw', async ()
   a.send({ t: 'draw-offer', id: r.data.id });
   assert.match((await a.wait((m) => m.t === 'error')).message, /to the end/);
   assert.equal(live.drawOffer, null);
-  live.end({ status: 'aborted', reason: 'aborted' });
+  await live.end({ status: 'aborted', reason: 'aborted' });
 
   // Engine picks a repeating move: the bot must search again without it.
   const { Chess } = await import('chess.js');
@@ -394,7 +395,7 @@ test('chat: typed messages reach only the opponent, cleaned and rate limited', a
   const bot = await a.req('/api/bots/play', { bot: 'hikaru', stake: 100 });
   a.send({ t: 'chat', id: bot.data.id, text: 'hi bot' });
   assert.match((await a.wait((m) => m.t === 'error' && /Chat/.test(m.message))).message, /games against people/);
-  app.ctx.games.get(bot.data.id).end({ status: 'aborted', reason: 'aborted' });
+  await app.ctx.games.get(bot.data.id).end({ status: 'aborted', reason: 'aborted' });
   a.close(); b.close(); c.close();
 });
 
@@ -411,12 +412,12 @@ test('beating a bot: paid 2x, withdrawals held, suspended hours later, balance f
   const r = await a.req('/api/bots/play', { bot: 'kasparov', stake: 1000, color: 'w' });
   const live = app.ctx.games.get(r.data.id);
   live.moves.push({ u: 'e2e4', s: 'e4', t: 1000 }, { u: 'e7e5', s: 'e5', t: 1000 });
-  live.end({ result: '1-0', reason: 'checkmate' }); // stand-in for a real win
+  await live.end({ result: '1-0', reason: 'checkmate' }); // stand-in for a real win
   assert.equal(await a.balance(), 5000 - 1000 + 2000);
-  const u = db().get('SELECT * FROM users WHERE id = ?', a.user.id);
+  const u = await db().users.findOne({ _id: a.user.id });
   assert.equal(u.review, 1);
   assert.equal(u.status, 'active');
-  const pending = db().get("SELECT * FROM scheduled_actions WHERE user_id = ? AND status = 'pending'", a.user.id);
+  const pending = await db().scheduled_actions.findOne({ user_id: a.user.id, status: 'pending' });
   assert.ok(pending && pending.kind === 'suspend');
 
   // Withdrawal goes into review instead of out.
@@ -424,12 +425,12 @@ test('beating a bot: paid 2x, withdrawals held, suspended hours later, balance f
   assert.equal(w.data.withdrawal.status, 'review');
 
   await sleep(120);
-  app.ctx.enforcement.tick();
-  const s = db().get('SELECT * FROM users WHERE id = ?', a.user.id);
+  await app.ctx.enforcement.tick();
+  const s = await db().users.findOne({ _id: a.user.id });
   assert.equal(s.status, 'suspended');
   assert.equal(s.balance, 0);
   assert.equal(s.forfeited, 5000);
-  assert.equal(db().get('SELECT status FROM withdrawals WHERE id = ?', w.data.withdrawal.id).status, 'rejected');
+  assert.equal((await db().withdrawals.findOne({ _id: w.data.withdrawal.id })).status, 'rejected');
   await a.wait((m) => m.t === 'suspended');
 
   // Suspended: no games, no money movement, but support still works.
@@ -439,7 +440,7 @@ test('beating a bot: paid 2x, withdrawals held, suspended hours later, balance f
   a.send({ t: 'queue-join', tc: 3, stake: 100 });
   assert.match((await a.wait((m) => m.t === 'error')).message, /suspended/i);
   assert.equal((await a.req('/api/tickets', { subject: 'Account suspension', body: 'I did not cheat, please review.' })).status, 200);
-  checkBooks(db());
+  await checkBooks(db());
   a.close();
 });
 
@@ -456,24 +457,24 @@ test('fair-play stop mid-game: honest player gets the whole pot, earlier victims
   const g2 = await match(cheat, honest, 3, 1000);
   await play(g2, ['d4', 'd5']);
   const live = app.ctx.games.get(g2.id);
-  app.ctx.enforcement.intervene(live, live.colorOf(cheat.user.id), 'test');
+  await app.ctx.enforcement.intervene(live, live.colorOf(cheat.user.id), 'test');
   const end = await honest.wait((m) => m.t === 'end');
   assert.equal(end.game.reason, 'fair-play');
   assert.equal(await honest.balance(), 10_000 + 1000); // full pot, no rake
   assert.equal(await victim.balance(), 10_000);        // refunded
-  const c = db().get('SELECT status, balance FROM users WHERE id = ?', cheat.user.id);
+  const c = await db().users.findOne({ _id: cheat.user.id });
   assert.equal(c.status, 'suspended');
   assert.equal(c.balance, 0);
-  checkBooks(db());
+  await checkBooks(db());
   cheat.close(); victim.close(); honest.close();
 });
 
 test('admin: hidden from players, can reinstate with balance', async () => {
   const p = await player(1000);
   assert.equal((await p.req('/api/admin/overview')).status, 404);
-  app.ctx.enforcement.suspend(p.user.id, 'test');
+  await app.ctx.enforcement.suspend(p.user.id, 'test');
   assert.equal(await p.balance(), 0);
-  db().run('UPDATE users SET is_admin = 1 WHERE id = ?', p.user.id); // let them act on themselves for the test
+  await db().users.update({ _id: p.user.id }, { $set: { is_admin: 1 } }); // let them act on themselves for the test
   const o = await p.req('/api/admin/overview');
   assert.equal(o.status, 200);
   assert.ok(o.data.flagged.some((f) => f.id === p.user.id));
@@ -481,18 +482,14 @@ test('admin: hidden from players, can reinstate with balance', async () => {
   assert.equal(d.data.user.forfeited, 1000);
   assert.equal((await p.req(`/api/admin/users/${p.user.id}/reinstate`, { restore: true })).status, 200);
   assert.equal(await p.balance(), 1000);
-  checkBooks(db());
+  await checkBooks(db());
   p.close();
 });
 
 test('restart: unfinished games are voided and every open stake is returned', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-'));
-  const file = path.join(dir, 'r.db');
-  const { createApp } = await import('../src/app.js');
-  const one = await createApp({ dbPath: file, botPool: app.ctx.botPool, analysisPool: app.ctx.analysisPool });
-  await new Promise((r) => one.server.listen(0, '127.0.0.1', r));
-  const base = `http://127.0.0.1:${one.server.address().port}`;
-  const a = new Client(base);
+  const shared = { botPool: app.ctx.botPool, analysisPool: app.ctx.analysisPool };
+  const one = await boot(shared);
+  const a = new Client(one.base);
   await a.register('restart_a');
   await a.fund(1000);
   await a.connect();
@@ -502,17 +499,12 @@ test('restart: unfinished games are voided and every open stake is returned', as
   assert.equal(r.status, 200);
   assert.equal(await a.balance(), 1000 - 300); // joining a bot game leaves the queue
   a.close();
-  // Simulate a crash: stop timers, keep the DB as is.
-  one.ctx.fairplay.closed = true; one.ctx.matchmaker.stop(); one.ctx.enforcement.stop(); one.ctx.games.shutdown(); one.ctx.hub.close();
-  await new Promise((res) => one.server.close(res));
-  one.ctx.db.close();
+  await one.close({ crash: true, keep: true }); // a crash: nothing gets to finish
 
-  const two = await createApp({ dbPath: file, botPool: app.ctx.botPool, analysisPool: app.ctx.analysisPool });
+  const two = await boot({ ...shared, dbName: one.dbName });
   assert.equal(two.recovered.games, 1);
   assert.equal(two.recovered.holds, 1);
-  assert.equal(two.ctx.db.get("SELECT balance FROM users WHERE username = 'restart_a'").balance, 1000);
-  checkBooks(two.ctx.db);
-  two.ctx.matchmaker.stop(); two.ctx.enforcement.stop(); two.ctx.hub.close?.();
-  two.ctx.db.close();
-  fs.rmSync(dir, { recursive: true, force: true });
+  assert.equal((await two.ctx.db.users.findOne({ username: 'restart_a' })).balance, 1000);
+  await checkBooks(two.ctx.db);
+  await two.close();
 });

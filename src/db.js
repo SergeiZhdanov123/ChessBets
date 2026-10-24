@@ -1,212 +1,115 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { createRequire } from 'node:module';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { MongoClient } from 'mongodb';
 
-const require = createRequire(import.meta.url);
+// MongoDB storage. Documents keep the field names the SQL version had
+// (snake_case, integer cents, millisecond timestamps), and every read through
+// this module hands back `id` in place of `_id`.
+//
+// Money moves run inside db.tx(): a real MongoDB transaction, one at a time
+// per process, so a balance check and the write that depends on it can never
+// interleave with another one. A tx() started inside a tx() joins the outer
+// transaction.
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY,
-  username TEXT NOT NULL,
-  username_lc TEXT NOT NULL UNIQUE,
-  pass_hash TEXT NOT NULL,
-  balance INTEGER NOT NULL DEFAULT 0 CHECK (balance >= 0),
-  status TEXT NOT NULL DEFAULT 'active',
-  suspended_at INTEGER,
-  suspend_reason TEXT,
-  forfeited INTEGER NOT NULL DEFAULT 0,
-  review INTEGER NOT NULL DEFAULT 0,
-  is_admin INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL,
-  created_ip TEXT,
-  device_id TEXT,
-  last_ip TEXT,
-  last_seen INTEGER
-);
-CREATE TABLE IF NOT EXISTS sessions (
-  token_hash TEXT PRIMARY KEY,
-  user_id INTEGER NOT NULL,
-  created_at INTEGER NOT NULL,
-  expires_at INTEGER NOT NULL,
-  ip TEXT,
-  ua TEXT
-);
-CREATE TABLE IF NOT EXISTS user_devices (
-  user_id INTEGER NOT NULL,
-  device_id TEXT NOT NULL,
-  ip TEXT,
-  first_seen INTEGER NOT NULL,
-  last_seen INTEGER NOT NULL,
-  PRIMARY KEY (user_id, device_id)
-);
-CREATE INDEX IF NOT EXISTS user_devices_device ON user_devices(device_id);
-CREATE TABLE IF NOT EXISTS ledger (
-  id INTEGER PRIMARY KEY,
-  user_id INTEGER,              -- NULL means the house
-  kind TEXT NOT NULL,
-  amount INTEGER NOT NULL,      -- signed, from the account's point of view
-  balance_after INTEGER,
-  ref TEXT,
-  note TEXT,
-  created_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS ledger_user ON ledger(user_id, id);
-CREATE TABLE IF NOT EXISTS holds (
-  id INTEGER PRIMARY KEY,
-  user_id INTEGER NOT NULL,
-  amount INTEGER NOT NULL,
-  kind TEXT NOT NULL,           -- queue | game
-  ref TEXT,
-  status TEXT NOT NULL DEFAULT 'held',
-  created_at INTEGER NOT NULL,
-  closed_at INTEGER
-);
-CREATE INDEX IF NOT EXISTS holds_open ON holds(status);
-CREATE TABLE IF NOT EXISTS games (
-  id TEXT PRIMARY KEY,
-  kind TEXT NOT NULL,           -- human | bot
-  tc INTEGER NOT NULL,          -- minutes
-  stake INTEGER NOT NULL,
-  white_id INTEGER,
-  black_id INTEGER,
-  bot TEXT,
-  status TEXT NOT NULL,         -- active | finished | aborted
-  result TEXT,
-  reason TEXT,
-  winner_id INTEGER,
-  moves TEXT NOT NULL DEFAULT '[]',
-  fen TEXT,
-  rake INTEGER NOT NULL DEFAULT 0,
-  payout_white INTEGER NOT NULL DEFAULT 0,
-  payout_black INTEGER NOT NULL DEFAULT 0,
-  white_ip TEXT, black_ip TEXT, white_device TEXT, black_device TEXT,
-  created_at INTEGER NOT NULL,
-  ended_at INTEGER
-);
-CREATE INDEX IF NOT EXISTS games_white ON games(white_id, created_at);
-CREATE INDEX IF NOT EXISTS games_black ON games(black_id, created_at);
-CREATE INDEX IF NOT EXISTS games_ended ON games(ended_at);
-CREATE TABLE IF NOT EXISTS fair_play_reports (
-  id INTEGER PRIMARY KEY,
-  game_id TEXT NOT NULL,
-  user_id INTEGER NOT NULL,
-  evidence REAL NOT NULL,
-  verdict TEXT NOT NULL,
-  metrics TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  UNIQUE (game_id, user_id)
-);
-CREATE INDEX IF NOT EXISTS fpr_user ON fair_play_reports(user_id, created_at);
-CREATE TABLE IF NOT EXISTS fair_play_events (
-  id INTEGER PRIMARY KEY,
-  user_id INTEGER NOT NULL,
-  game_id TEXT,
-  kind TEXT NOT NULL,
-  detail TEXT,
-  created_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS fpe_user ON fair_play_events(user_id, created_at);
-CREATE TABLE IF NOT EXISTS scheduled_actions (
-  id INTEGER PRIMARY KEY,
-  kind TEXT NOT NULL,
-  user_id INTEGER NOT NULL,
-  run_at INTEGER NOT NULL,
-  payload TEXT,
-  status TEXT NOT NULL DEFAULT 'pending',
-  created_at INTEGER NOT NULL,
-  done_at INTEGER
-);
-CREATE TABLE IF NOT EXISTS deposit_addresses (
-  user_id INTEGER NOT NULL,
-  coin TEXT NOT NULL,
-  address TEXT NOT NULL UNIQUE,
-  created_at INTEGER NOT NULL,
-  PRIMARY KEY (user_id, coin)
-);
-CREATE TABLE IF NOT EXISTS deposits (
-  id INTEGER PRIMARY KEY,
-  user_id INTEGER NOT NULL,
-  coin TEXT NOT NULL,
-  address TEXT NOT NULL,
-  amount INTEGER NOT NULL,
-  coin_amount TEXT NOT NULL,
-  confirmations INTEGER NOT NULL DEFAULT 0,
-  required INTEGER NOT NULL,
-  status TEXT NOT NULL,
-  txid TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  credited_at INTEGER
-);
-CREATE TABLE IF NOT EXISTS withdrawals (
-  id INTEGER PRIMARY KEY,
-  user_id INTEGER NOT NULL,
-  coin TEXT NOT NULL,
-  address TEXT NOT NULL,
-  amount INTEGER NOT NULL,
-  fee INTEGER NOT NULL,
-  net INTEGER NOT NULL,
-  coin_amount TEXT NOT NULL,
-  status TEXT NOT NULL,         -- processing | review | completed | rejected
-  txid TEXT,
-  note TEXT,
-  created_at INTEGER NOT NULL,
-  completed_at INTEGER
-);
-CREATE TABLE IF NOT EXISTS tickets (
-  id INTEGER PRIMARY KEY,
-  user_id INTEGER NOT NULL,
-  subject TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'open',
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS ticket_messages (
-  id INTEGER PRIMARY KEY,
-  ticket_id INTEGER NOT NULL,
-  author TEXT NOT NULL,         -- user | staff
-  body TEXT NOT NULL,
-  created_at INTEGER NOT NULL
-);
-`;
+const INDEXES = {
+  users: [[{ username_lc: 1 }, { unique: true }], [{ review: 1 }], [{ status: 1 }]],
+  sessions: [[{ user_id: 1 }], [{ expire_at: 1 }, { expireAfterSeconds: 0 }]],
+  user_devices: [[{ user_id: 1, device_id: 1 }, { unique: true }], [{ device_id: 1 }]],
+  ledger: [[{ user_id: 1, _id: -1 }], [{ ref: 1 }]],
+  holds: [[{ status: 1, user_id: 1 }]],
+  games: [
+    [{ white_id: 1, created_at: -1 }], [{ black_id: 1, created_at: -1 }],
+    [{ status: 1, ended_at: -1 }], [{ winner_id: 1, ended_at: -1 }],
+  ],
+  fair_play_reports: [[{ game_id: 1, user_id: 1 }, { unique: true }], [{ user_id: 1, created_at: -1 }]],
+  fair_play_events: [[{ user_id: 1, _id: -1 }]],
+  scheduled_actions: [[{ status: 1, run_at: 1 }], [{ user_id: 1, status: 1 }]],
+  deposit_addresses: [[{ user_id: 1, coin: 1 }, { unique: true }], [{ address: 1 }, { unique: true }]],
+  deposits: [[{ user_id: 1, _id: -1 }], [{ status: 1 }]],
+  withdrawals: [[{ user_id: 1, _id: -1 }], [{ status: 1 }]],
+  tickets: [[{ user_id: 1, updated_at: -1 }], [{ status: 1, updated_at: -1 }]],
+  counters: [],
+};
+export const COLLECTIONS = Object.keys(INDEXES);
 
-export function openDb(file) {
-  const { DatabaseSync } = require('node:sqlite');
-  if (file !== ':memory:') fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
-  const db = new DatabaseSync(file);
-  db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
-  db.exec(SCHEMA);
+const als = new AsyncLocalStorage();
+const session = () => {
+  const s = als.getStore();
+  return s && s.inTransaction() ? s : null;
+};
+const opts = (o) => {
+  const s = session();
+  return s ? { ...o, session: s } : o || {};
+};
+const out = (d) => {
+  if (!d) return null;
+  const { _id, ...rest } = d;
+  return { id: _id, ...rest };
+};
 
-  const cache = new Map();
-  const stmt = (sql) => {
-    let s = cache.get(sql);
-    if (!s) { s = db.prepare(sql); cache.set(sql, s); }
-    return s;
+function wrap(c) {
+  return {
+    raw: c,
+    findOne: async (filter, o) => out(await c.findOne(filter, opts(o))),
+    find: async (filter, o) => (await c.find(filter, opts(o)).toArray()).map(out),
+    count: (filter = {}, o) => c.countDocuments(filter, opts(o)),
+    // sum('$amount', { user_id: 3 })
+    sum: async (expr, filter = {}) =>
+      (await c.aggregate([{ $match: filter }, { $group: { _id: null, s: { $sum: expr } } }], opts()).toArray())[0]?.s ?? 0,
+    aggregate: (pipeline, o) => c.aggregate(pipeline, opts(o)).toArray(),
+    insert: (doc, o) => c.insertOne(doc, opts(o)),
+    update: (filter, change, o) => c.updateOne(filter, change, opts(o)),
+    updateMany: (filter, change, o) => c.updateMany(filter, change, opts(o)),
+    replace: (filter, doc, o) => c.replaceOne(filter, doc, opts(o)),
+    // findOneAndUpdate, returning the document after the change by default.
+    modify: async (filter, change, o) => out(await c.findOneAndUpdate(filter, change, opts({ returnDocument: 'after', ...o }))),
+    delete: (filter, o) => c.deleteOne(filter, opts(o)),
+    deleteMany: (filter, o) => c.deleteMany(filter, opts(o)),
   };
+}
 
-  let depth = 0;
-  const api = {
-    raw: db,
-    get: (sql, ...p) => stmt(sql).get(...p),
-    all: (sql, ...p) => stmt(sql).all(...p),
-    run: (sql, ...p) => stmt(sql).run(...p),
-    // Nested calls become savepoints, so helpers can open their own
-    // transaction and still compose inside a bigger one.
-    tx(fn) {
-      const sp = `sp${depth}`;
-      db.exec(depth === 0 ? 'BEGIN IMMEDIATE' : `SAVEPOINT ${sp}`);
-      depth++;
+export async function openDb({ uri, name }) {
+  if (!uri) throw new Error('MONGODB_URI is not set. Put it in .env or in the environment (see README).');
+  const client = new MongoClient(uri, { serverSelectionTimeoutMS: 15_000, maxPoolSize: 20 });
+  await client.connect();
+  const mdb = client.db(name);
+
+  // Collections have to exist before a transaction can write to them.
+  const have = new Set((await mdb.listCollections({}, { nameOnly: true }).toArray()).map((c) => c.name));
+  for (const n of COLLECTIONS) {
+    if (have.has(n)) continue;
+    await mdb.createCollection(n).catch((e) => { if (e.codeName !== 'NamespaceExists') throw e; });
+  }
+  for (const [n, list] of Object.entries(INDEXES)) {
+    if (list.length) await mdb.collection(n).createIndexes(list.map(([key, o]) => ({ key, ...o })));
+  }
+
+  const db = { client, raw: mdb };
+  for (const n of COLLECTIONS) db[n] = wrap(mdb.collection(n));
+
+  // Sequential integer ids (users, tickets, deposits...), so URLs and the
+  // admin screens keep short numbers. Taken outside any transaction: an
+  // aborted transaction just leaves a gap.
+  db.nextId = async (kind) =>
+    (await mdb.collection('counters').findOneAndUpdate({ _id: kind }, { $inc: { seq: 1 } }, { upsert: true, returnDocument: 'after' })).seq;
+
+  let lock = Promise.resolve();
+  db.tx = (fn) => {
+    if (session()) return fn();
+    const run = lock.then(async () => {
+      const s = client.startSession();
       try {
-        const out = fn();
-        depth--;
-        db.exec(depth === 0 ? 'COMMIT' : `RELEASE ${sp}`);
-        return out;
-      } catch (err) {
-        depth--;
-        db.exec(depth === 0 ? 'ROLLBACK' : `ROLLBACK TO ${sp}; RELEASE ${sp}`);
-        throw err;
+        let result;
+        await s.withTransaction(async () => { result = await als.run(s, fn); });
+        return result;
+      } finally {
+        await s.endSession();
       }
-    },
-    close: () => db.close(),
+    });
+    lock = run.catch(() => {});
+    return run;
   };
-  return api;
+
+  db.close = () => client.close();
+  db.drop = () => mdb.dropDatabase();
+  return db;
 }
