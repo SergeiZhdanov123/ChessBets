@@ -63,6 +63,7 @@ function terms() {
     <h2>Human games</h2>
     <ul>
       <li>Six queues: 3 or 10 minutes, for $1, $5 or $10. No increment. Opponents are random within a queue; there are no ratings.</li>
+      <li>You can chat with your opponent during and after the game. Only the two of you see it, and you can mute your opponent at any time. Keep it civil.</li>
       <li>Your wager is taken when you join a queue and returned if you leave before being matched.</li>
       <li>A ${cfg.rakeBps / 100}% rake is taken from the pot of every game that is played, including draws. The winner receives the pot minus the rake. On a draw each player receives their wager minus ${cfg.rakeBps / 100}%.</li>
       <li>If a player does not make a first move within 30 seconds the game is aborted and both wagers are returned in full.</li>
@@ -73,7 +74,8 @@ function terms() {
     <h2>Bot games</h2>
     <ul>
       <li>Bot games are ${cfg.bot.minutes} minutes per side against the house. Wagers from $1 to $100.</li>
-      <li>A win pays double your wager. A draw returns it. No rake is taken.</li>
+      <li>A win pays double your wager. No rake is taken.</li>
+      <li>Bots never offer or accept a draw and steer clear of drawn positions. If a game is drawn anyway (for example you force a stalemate), your wager is returned.</li>
       <li>The bots are computer opponents designed to play in the style of well-known players. They are not those players, and the players are not affiliated with ChessBets.</li>
       <li>A win against a bot is handled under the Fair Play rules below.</li>
     </ul>

@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import { Chess } from 'chess.js';
 import { humanPayouts, rakeOf, withdrawFeeOf, fmt } from '../src/money.js';
 import { binomTail, fisherCombine, winPct, moveAccuracy, scorePlayer, accountEvidence, decide, MODEL } from '../src/anticheat.js';
-import { BOTS, bookMove, thinkTime } from '../src/bots.js';
+import { BOTS, bookMove, thinkTime, drawingMoves } from '../src/bots.js';
+import { cleanChat } from '../src/hub.js';
 import { COINS, toCoin } from '../src/wallet.js';
 import { parseInfo, scoreCp } from '../src/engine.js';
 
@@ -158,4 +159,24 @@ test('UCI info parsing', () => {
   assert.equal(parseInfo('info depth 10 score cp 20 lowerbound pv e2e4'), null);
   assert.equal(scoreCp(parseInfo('info depth 5 score mate 3 pv a1a8')), 9970);
   assert.equal(scoreCp(parseInfo('info depth 5 score mate -2 pv a1a8')), -9980);
+});
+
+test('drawing moves: threefold repetition and stalemate are spotted, game left untouched', () => {
+  const c = new Chess();
+  for (const m of ['Nf3', 'Nf6', 'Ng1', 'Ng8', 'Nf3', 'Nf6', 'Ng1']) c.move(m);
+  const fen = c.fen();
+  assert.deepEqual([...drawingMoves(c)], ['f6g8']);
+  assert.equal(c.fen(), fen);
+  assert.equal(c.history().length, 7);
+  const s = new Chess('k7/8/1K6/2Q5/8/8/8/8 w - - 0 1');
+  assert.ok(drawingMoves(s).has('c5c7'));
+  assert.ok(!drawingMoves(s).has('c5c6'));
+  assert.equal(drawingMoves(new Chess()).size, 0);
+});
+
+test('chat text is cleaned and capped', () => {
+  assert.equal(cleanChat('  hi\u0000 there\n\n  you  '), 'hi there you');
+  assert.equal(cleanChat('\u202eabc'), 'abc');
+  assert.equal(cleanChat('x'.repeat(500)).length, 200);
+  assert.equal(cleanChat(null), '');
 });

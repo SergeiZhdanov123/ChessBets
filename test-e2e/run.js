@@ -114,6 +114,8 @@ await check('bot game: drag a move, the bot replies, resign settles', async () =
   await move(alice, 'g1', 'f3');
   await alice.waitForFunction(() => document.querySelectorAll('#moves button').length >= 4, null, { timeout: 15_000 });
   assert.equal(await money(alice), '$193.00');
+  assert.equal(await alice.locator('[data-a=draw]').count(), 0, 'no draw button against a bot');
+  assert.equal(await alice.locator('.chat').count(), 0, 'no chat against a bot');
   await alice.click('[data-a=resign]');
   await alice.click('[data-yes]');
   await alice.waitForSelector('.result');
@@ -136,10 +138,21 @@ await check('human game: queue, match, moves, chat, draw offer, rake on the draw
   const [W, B] = aliceWhite ? [alice, bob] : [bob, alice];
   await move(W, 'd2', 'd4');
   await B.waitForFunction(() => document.querySelectorAll('#moves button').length === 1);
+  // A half-typed message must survive the opponent's move.
+  await W.fill('.chat-form input', 'gl hf');
   await move(B, 'd7', 'd5', true);
   await W.waitForFunction(() => document.querySelectorAll('#moves button').length === 2);
-  await W.click('[data-chat="0"]');
-  await B.waitForFunction(() => document.querySelector('#chat')?.textContent.includes('Good luck'));
+  assert.equal(await W.inputValue('.chat-form input'), 'gl hf');
+  await W.press('.chat-form input', 'Enter');
+  await B.waitForSelector('.cm.opp');
+  assert.match(await B.locator('.cm.opp').textContent(), /Opponent\s*gl hf/);
+  await W.waitForSelector('.cm.me');
+  assert.match(await W.locator('.cm.me').textContent(), /You\s*gl hf/);
+  const [meBg, oppBg] = [await W.locator('.cm.me').evaluate((e) => getComputedStyle(e).backgroundColor), await B.locator('.cm.opp').evaluate((e) => getComputedStyle(e).backgroundColor)];
+  assert.notEqual(meBg, oppBg);
+  await B.click('[data-chat="0"]');
+  await W.waitForFunction(() => [...document.querySelectorAll('.cm.opp')].some((e) => e.textContent.includes('Good luck')));
+  if (process.env.E2E_SHOTS) { await W.screenshot({ path: `${process.env.E2E_SHOTS}/chat-w.png` }); await B.screenshot({ path: `${process.env.E2E_SHOTS}/chat-b.png` }); }
   await W.click('[data-a=draw]');
   await B.waitForSelector('[data-a=accept]');
   await B.click('[data-a=accept]');

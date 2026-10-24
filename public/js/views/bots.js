@@ -98,7 +98,7 @@ export default function bots(el, [botParam]) {
       </div>
       <div class="form-error" id="berr">${!valid && amountText !== '' ? `Wager between ${money(limits.min)} and ${money(limits.max)}` : ''}</div>
       ${action}
-      <p class="panel-note">You play against the house. Win and you are paid double your wager; a draw returns it; a loss keeps it. No rake on bot games. <a href="/fair-play">Fair Play rules</a> apply to bot games too.</p>`;
+      <p class="panel-note">You play against the house. Win and you are paid double your wager; lose and the house keeps it. Bots play every game to a finish and never agree to a draw. No rake on bot games. <a href="/fair-play">Fair Play rules</a> apply to bot games too.</p>`;
 
     panel.querySelectorAll('[data-bot]').forEach((x) => (x.onclick = () => {
       mem.bot = x.dataset.bot; save();

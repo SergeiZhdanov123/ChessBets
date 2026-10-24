@@ -171,7 +171,12 @@ export default function gameView(el, [id]) {
       paintPanel();
     }),
     bus.on('presence', (m) => { if (g && m.id === id) { g.gone = m.gone; paintBars(); } }),
-    bus.on('chat', (m) => { if (g && m.id === id) { g.chat.push(m.entry); paintChat(); } }),
+    bus.on('chat', (m) => {
+      if (!g || m.id !== id) return;
+      g.chat.push(m.entry);
+      if (m.entry.c !== you() && !chatMuted) sound.notify();
+      paintChat();
+    }),
     bus.on('ws-open', () => ws.send({ t: 'sub', id })),
     bus.on('error', (m) => { if (m.code === 'not_found' || m.code === 'private') notFound(m.message); }),
   ];
@@ -302,8 +307,8 @@ export default function gameView(el, [id]) {
         <div class="act-row">
           ${canAbort
             ? `<button class="btn btn-gray" data-a="abort">${icon('x')}Abort</button>`
-            : `<button class="btn btn-gray" data-a="draw" ${g.drawOffer === mine ? 'disabled' : ''}>${icon('hand')}${g.drawOffer === mine ? 'Offered' : 'Offer draw'}</button>`}
-          <button class="btn btn-gray" data-a="resign" ${canAbort ? 'disabled' : ''}>${icon('flag')}Resign</button>
+            : isBot ? '' : `<button class="btn btn-gray" data-a="draw" ${g.drawOffer === mine ? 'disabled' : ''}>${icon('hand')}${g.drawOffer === mine ? 'Offered' : 'Offer draw'}</button>`}
+          <button class="btn btn-gray" data-a="resign" ${canAbort ? 'disabled' : ''} ${isBot && !canAbort ? 'style="grid-column:1/-1"' : ''}>${icon('flag')}Resign</button>
         </div>`;
     } else if (!active()) {
       actions = `<div class="act-row">${again()}<a class="btn btn-gray" href="/">Lobby</a></div>`;
@@ -311,7 +316,12 @@ export default function gameView(el, [id]) {
     const offer = active() && mine && g.drawOffer && g.drawOffer !== mine
       ? `<div class="offer"><span>${isBot ? 'Draw offered' : 'Your opponent offers a draw'}</span><button class="btn btn-green btn-sm" data-a="accept">Accept</button><button class="btn btn-gray btn-sm" data-a="decline">Decline</button></div>` : '';
 
-    panel.innerHTML = `
+    // The panel has a part that repaints on every move and a chat block that
+    // is built once, so a half-typed message survives incoming moves.
+    if (!panel.querySelector('#gpMain')) panel.innerHTML = '<div id="gpMain" style="display:flex;flex-direction:column;flex:1;min-height:0"></div><div id="gpChat"></div>';
+    const main = panel.querySelector('#gpMain');
+    if (!isBot && mine) buildChat();
+    main.innerHTML = `
       <div class="gp-head">
         <span class="t">${icon(isBot ? 'bot' : 'users')}${isBot ? `${esc(botName)} · ${g.tc} min` : `Human · ${g.tc} min`}</span>
         <span class="dim" style="font-weight:600;font-size:12.5px">${active() ? 'Live' : 'Finished'}</span>
@@ -329,16 +339,45 @@ export default function gameView(el, [id]) {
         <button class="btn btn-gray" data-nav="next" title="Next (→)">${icon('next')}</button>
         <button class="btn btn-gray" data-nav="last" title="Latest">${icon('last')}</button>
       </div>
-      ${actions}
-      ${!isBot && mine ? `<div class="chat"><div class="chat-log" id="chat"></div><div class="chat-presets">${(store.config.chat || []).map((t, i) => `<button data-chat="${i}">${esc(t)}</button>`).join('')}</div></div>` : ''}`;
+      ${actions}`;
 
-    panel.querySelectorAll('[data-a]').forEach((b) => (b.onclick = () => action(b.dataset.a)));
-    panel.querySelectorAll('[data-nav]').forEach((b) => (b.onclick = () => nav(b.dataset.nav)));
-    panel.querySelectorAll('[data-ply]').forEach((b) => (b.onclick = () => goto(+b.dataset.ply)));
-    panel.querySelectorAll('[data-chat]').forEach((b) => (b.onclick = () => ws.send({ t: 'chat', id: g.id, k: +b.dataset.chat })));
-    const mv = panel.querySelector('#moves');
+    main.querySelectorAll('[data-a]').forEach((b) => (b.onclick = () => action(b.dataset.a)));
+    main.querySelectorAll('[data-nav]').forEach((b) => (b.onclick = () => nav(b.dataset.nav)));
+    main.querySelectorAll('[data-ply]').forEach((b) => (b.onclick = () => goto(+b.dataset.ply)));
+    const mv = main.querySelector('#moves');
     const cur = mv.querySelector('.cur');
     if (cur) cur.scrollIntoView({ block: 'nearest' }); else mv.scrollTop = mv.scrollHeight;
+  }
+
+  let chatMuted = false;
+  function buildChat() {
+    const box = panel.querySelector('#gpChat');
+    if (!box || box.dataset.ready) return;
+    box.dataset.ready = '1';
+    box.innerHTML = `
+      <div class="chat">
+        <div class="chat-head"><span>Chat</span><button class="chat-mute" type="button" title="Hide your opponent's messages">Mute opponent</button></div>
+        <div class="chat-log" id="chat" aria-live="polite"></div>
+        <form class="chat-form" autocomplete="off">
+          <input class="input" maxlength="200" placeholder="Send a message" aria-label="Message">
+          <button class="btn btn-blue btn-sm" type="submit">Send</button>
+        </form>
+        <div class="chat-presets">${(store.config.chat || []).map((t, i) => `<button type="button" data-chat="${i}">${esc(t)}</button>`).join('')}</div>
+      </div>`;
+    const input = box.querySelector('input');
+    box.querySelector('form').onsubmit = (e) => {
+      e.preventDefault();
+      const text = input.value.trim();
+      if (!text || !g) return;
+      ws.send({ t: 'chat', id: g.id, text });
+      input.value = '';
+    };
+    box.querySelectorAll('[data-chat]').forEach((b) => (b.onclick = () => ws.send({ t: 'chat', id: g.id, k: +b.dataset.chat })));
+    box.querySelector('.chat-mute').onclick = (e) => {
+      chatMuted = !chatMuted;
+      e.currentTarget.textContent = chatMuted ? 'Unmute opponent' : 'Mute opponent';
+      paintChat();
+    };
     paintChat();
   }
 
@@ -365,9 +404,14 @@ export default function gameView(el, [id]) {
   function paintChat() {
     const c = panel.querySelector('#chat');
     if (!c || !g) return;
-    c.innerHTML = g.chat.length
-      ? g.chat.map((m) => `<div><b>${m.c === you() ? 'You' : 'Opponent'}:</b> ${esc(m.text)}</div>`).join('')
-      : '<div class="dim">Quick messages only.</div>';
+    const shown = g.chat.filter((m) => !(chatMuted && m.c !== you()));
+    const hidden = g.chat.length - shown.length;
+    c.innerHTML = shown.length
+      ? shown.map((m) => {
+          const me = m.c === you();
+          return `<div class="cm ${me ? 'me' : 'opp'}"><span class="who">${me ? 'You' : 'Opponent'}</span>${esc(m.text)}</div>`;
+        }).join('') + (hidden ? `<div class="dim cm-note">${hidden} hidden</div>` : '')
+      : `<div class="dim cm-note">${hidden ? `${hidden} hidden` : 'Say hi to your opponent.'}</div>`;
     c.scrollTop = c.scrollHeight;
   }
 

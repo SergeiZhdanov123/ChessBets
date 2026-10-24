@@ -326,6 +326,78 @@ test('bot game: real engine replies, resigning gives the house the stake', async
   a.close();
 });
 
+test('bots never take a draw and re-search when their move would draw', async () => {
+  const a = await player();
+  const r = await a.req('/api/bots/play', { bot: 'magnus', stake: 100, color: 'w' });
+  a.send({ t: 'sub', id: r.data.id });
+  await a.wait((m) => m.t === 'game');
+  const live = app.ctx.games.get(r.data.id);
+  live.moves.push({ u: 'e2e4', s: 'e4' }, { u: 'e7e5', s: 'e5' });
+  a.send({ t: 'draw-offer', id: r.data.id });
+  assert.match((await a.wait((m) => m.t === 'error')).message, /to the end/);
+  assert.equal(live.drawOffer, null);
+  live.end({ status: 'aborted', reason: 'aborted' });
+
+  // Engine picks a repeating move: the bot must search again without it.
+  const { Chess } = await import('chess.js');
+  const history = ['g1f3', 'g8f6', 'f3g1', 'f6g8', 'g1f3', 'g8f6', 'f3g1'];
+  const c = new Chess();
+  for (const u of history) c.move({ from: u.slice(0, 2), to: u.slice(2, 4) });
+  const { drawingMoves } = await import('../src/bots.js');
+  const drawing = drawingMoves(c);
+  const real = app.ctx.botPool;
+  const calls = [];
+  app.ctx.botPool = {
+    search: async (opts) => {
+      calls.push(opts);
+      return calls.length === 1
+        ? { best: 'f6g8', lines: [{ move: 'f6g8', cp: 0, mate: null }] }
+        : { best: 'e7e5', lines: [{ move: 'e7e5', cp: -15, mate: null }] };
+    },
+  };
+  try {
+    const pick = await app.ctx.games.botMove(history, 1000, drawing, c.moves().length);
+    assert.equal(pick, 'e7e5');
+    assert.deepEqual(calls[0].moves, history);              // full history sent to the engine
+    assert.ok(!calls[1].searchmoves.includes('f6g8'));      // drawing move excluded
+    assert.equal(calls[1].searchmoves.length, c.moves().length - 1);
+  } finally { app.ctx.botPool = real; }
+  a.close();
+});
+
+test('chat: typed messages reach only the opponent, cleaned and rate limited', async () => {
+  const a = await player(), b = await player(), c = await player(0);
+  const g = await match(a, b, 10, 100);
+  c.send({ t: 'sub', id: g.id });
+  await c.wait((m) => m.t === 'error');
+  g.white.send({ t: 'chat', id: g.id, text: '  hello\u0000   there  ' });
+  const got = await g.black.wait((m) => m.t === 'chat' && m.entry.c === 'w');
+  assert.equal(got.entry.text, 'hello there');
+  assert.equal(got.entry.c, 'w');
+  await g.white.wait((m) => m.t === 'chat' && m.entry.c === 'w'); // sender sees their own message
+  g.black.send({ t: 'chat', id: g.id, k: 0 });
+  assert.equal((await g.white.wait((m) => m.t === 'chat' && m.entry.c === 'b')).entry.text, 'Good luck');
+  g.white.send({ t: 'chat', id: g.id, text: 'x'.repeat(300) });
+  assert.equal((await g.black.wait((m) => m.t === 'chat' && m.entry.c === 'w' && m.entry.text.startsWith('xxx'))).entry.text.length, 200);
+  g.white.send({ t: 'chat', id: g.id, text: 'one' });
+  g.white.send({ t: 'chat', id: g.id, text: 'two' });
+  assert.match((await g.white.wait((m) => m.t === 'error' && m.code === 'chat')).message, /Slow down/);
+  await sleep(100);
+  assert.ok(!c.msgs.some((m) => m.t === 'chat'), 'outsiders must not receive chat');
+  const snapB = app.ctx.games.get(g.id).snapshot(b.user.id);
+  const snapC = app.ctx.games.get(g.id).snapshot(c.user.id);
+  assert.ok(snapB.chat.length >= 3);
+  assert.equal(snapC.chat.length, 0);
+  // No chat in bot games.
+  g.white.send({ t: 'resign', id: g.id });
+  await a.wait((m) => m.t === 'end' && m.id === g.id);
+  const bot = await a.req('/api/bots/play', { bot: 'hikaru', stake: 100 });
+  a.send({ t: 'chat', id: bot.data.id, text: 'hi bot' });
+  assert.match((await a.wait((m) => m.t === 'error' && /Chat/.test(m.message))).message, /games against people/);
+  app.ctx.games.get(bot.data.id).end({ status: 'aborted', reason: 'aborted' });
+  a.close(); b.close(); c.close();
+});
+
 test('bot stake limits', async () => {
   const a = await player(20_000);
   assert.equal((await a.req('/api/bots/play', { bot: 'magnus', stake: 50 })).status, 400);

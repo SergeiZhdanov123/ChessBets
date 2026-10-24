@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { Chess } from 'chess.js';
 import { config } from './config.js';
 import { humanPayouts } from './money.js';
-import { BOTS, bookMove, thinkTime } from './bots.js';
+import { BOTS, bookMove, thinkTime, drawingMoves } from './bots.js';
 import { scoreCp } from './engine.js';
 
 const UCI = /^[a-h][1-8][a-h][1-8][qrbn]?$/;
@@ -87,7 +87,7 @@ export class LiveGame {
       drawOffer: this.drawOffer,
       firstMoveDeadline: this.firstMoveDeadline || null,
       gone: this.gone,
-      chat: this.chat.slice(-20),
+      chat: forUserId && this.colorOf(forUserId) ? this.chat.slice(-50) : [],
       settlement: this.settlement || null,
       serverNow: now,
     };
@@ -187,12 +187,12 @@ export class LiveGame {
 
   offerDraw(color) {
     if (this.status !== 'active' || this.ply < 2) return 'Not now';
+    if (this.kind === 'bot') return 'Bots play every game to the end';
     if (this.drawOffer === other(color)) return this.acceptDraw(color);
     if (this.ply - this.lastDrawOfferPly[color] < 6) return 'You offered a draw recently';
     this.drawOffer = color;
     this.lastDrawOfferPly[color] = this.ply;
     this.broadcast({ t: 'draw', id: this.id, offer: color });
-    if (this.isBot(other(color))) this.mgr.botConsiderDraw(this);
     return null;
   }
 
@@ -229,7 +229,8 @@ export class LiveGame {
   addChat(color, text) {
     const entry = { c: color, text, at: Date.now() };
     this.chat.push(entry);
-    this.broadcast({ t: 'chat', id: this.id, entry });
+    // Only the two players see the chat.
+    this.broadcast((c) => (c.userId && this.colorOf(c.userId) ? { t: 'chat', id: this.id, entry } : null));
   }
 
   // { result, reason } for a finished game, { status: 'aborted' } for no game.
@@ -403,10 +404,10 @@ export function createGames(ctx) {
         return;
       }
       const movetime = thinkTime(botId, { ply, clockMs: g.remaining(color) }, config.botMoveScale);
-      ctx.botPool.search({ fen: g.chess.fen(), movetime }).then(({ best, lines }) => {
-        g.lastBotEval = lines[0] ? scoreCp(lines[0]) : 0;
+      const history = g.moves.map((m) => m.u);
+      mgr.botMove(history, movetime, drawingMoves(g.chess), g.chess.moves().length).then((uci) => {
         const wait = Math.max(0, Math.round(150 * config.botMoveScale) - (Date.now() - started));
-        g.timers.bot = setTimeout(() => best && play(best), wait);
+        g.timers.bot = setTimeout(() => uci && play(uci), wait);
       }).catch((err) => {
         if (ctx.closed) return;
         console.error('bot search failed', g.id, err.message);
@@ -414,15 +415,20 @@ export function createGames(ctx) {
       });
     },
 
-    // The bot takes a draw only when it believes it is worse.
-    botConsiderDraw(g) {
-      setTimeout(() => {
-        if (g.status !== 'active' || !g.drawOffer) return;
-        const botColor = g.white.bot ? 'w' : 'b';
-        const evalForBot = g.turn === botColor ? (g.lastBotEval ?? 0) : -(g.lastBotEval ?? 0);
-        if (g.lastBotEval !== undefined && evalForBot < -50) g.acceptDraw(botColor);
-        else g.declineDraw(botColor);
-      }, Math.round(900 * config.botMoveScale));
+    // Bots play for a win. If the engine's choice would end the game in a
+    // draw, search again over every move that doesn't, and play the best of
+    // those unless it leaves the bot clearly lost (a loss pays out double,
+    // which is worse for the house than a draw).
+    async botMove(history, movetime, drawing, legalCount) {
+      const first = await ctx.botPool.search({ moves: history, movetime });
+      if (!first.best || !drawing.has(first.best)) return first.best;
+      if (drawing.size >= legalCount) return first.best; // every move draws
+      const c = new Chess();
+      for (const u of history) c.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u[4] });
+      const others = c.moves({ verbose: true }).map((m) => m.from + m.to + (m.promotion || '')).filter((u) => !drawing.has(u));
+      const second = await ctx.botPool.search({ moves: history, movetime: Math.max(200, movetime / 2), searchmoves: others });
+      const score = second.lines[0] ? scoreCp(second.lines[0]) : 0;
+      return second.best && score > -300 ? second.best : first.best;
     },
 
     // After a restart nothing in memory survived. Games that were in progress

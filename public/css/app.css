@@ -508,10 +508,21 @@ select.input { appearance: none; padding-right: 30px; background-image: url("dat
 .act-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .offer { background: var(--bg-2); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; font-weight: 600; animation: pop 0.2s var(--ease); }
 .offer span { flex: 1; }
-.chat { margin-top: 10px; }
-.chat-log { background: var(--bg-2); border-radius: var(--radius); padding: 8px 10px; min-height: 54px; max-height: 96px; overflow-y: auto; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
-.chat-log div { padding: 2px 0; color: var(--text-2); }
-.chat-log b { color: var(--text); }
+.chat { margin-top: 12px; border-top: 2px solid var(--bg-2); padding-top: 10px; }
+.chat-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-weight: 700; }
+.chat-mute { font-size: 12px; font-weight: 700; color: var(--text-3); padding: 3px 6px; border-radius: var(--radius); }
+.chat-mute:hover { color: var(--text); background: var(--bg-2); }
+.chat-log { background: var(--bg-2); border-radius: var(--radius); padding: 8px; height: 150px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; margin-bottom: 8px; }
+.cm { max-width: 86%; padding: 6px 10px 7px; border-radius: 10px; line-height: 1.35; word-wrap: break-word; overflow-wrap: anywhere; color: var(--text); font-weight: 500; }
+.cm .who { display: block; font-size: 11px; font-weight: 800; margin-bottom: 1px; }
+.cm.me { align-self: flex-end; background: rgba(0, 231, 1, 0.13); border-bottom-right-radius: 3px; }
+.cm.me .who { color: var(--green); }
+.cm.opp { align-self: flex-start; background: rgba(20, 117, 225, 0.22); border-bottom-left-radius: 3px; }
+.cm.opp .who { color: #7db8ff; }
+.cm-note { align-self: center; font-size: 12px; font-weight: 600; margin: auto 0; }
+.chat-form { display: flex; gap: 6px; margin-bottom: 8px; }
+.chat-form .input { height: 34px; font-size: 13.5px; }
+.chat-form .btn { height: 34px; }
 .chat-presets { display: flex; flex-wrap: wrap; gap: 4px; }
 .chat-presets button { font-size: 12px; font-weight: 700; padding: 5px 9px; border-radius: 999px; background: var(--bg-4); transition: background 0.15s; }
 .chat-presets button:hover { background: var(--bg-5); }

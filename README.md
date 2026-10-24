@@ -15,7 +15,9 @@ To make yourself an admin, either start with `ADMIN_USERS=yourname node server.j
 
 **Play a Human.** Six queues: 3 or 10 minutes, $1, $5 or $10, no increment. No ratings. Every second the matchmaker shuffles each queue and pairs people at random. It prefers opponents you haven't met recently. The only hard block is two accounts in the same browser. Games between accounts that share a device history or an IP are allowed but logged for fair-play review (set `BLOCK_SAME_IP=1` to refuse same-IP pairings).
 
-**Play a Bot.** Hikaru, Magnus and Kasparov. All three are full-strength Stockfish 19 (Skill 20, no strength limit, multiple threads, 0.7 to 4.2 s a move). What differs between them is the opening repertoire, the pace and the presentation. The site calls them bots "built to play in the style of" each player, with a line saying they are not affiliated with or endorsed by the players. 30 minutes a side. Wagers from $1 to $100. A win pays 2x, a draw returns the wager, and there is no rake.
+**Play a Bot.** Hikaru, Magnus and Kasparov. All three are full-strength Stockfish 19 (Skill 20, no strength limit, multiple threads, 0.7 to 4.2 s a move). What differs between them is the opening repertoire, the pace and the presentation. The site calls them bots "built to play in the style of" each player, with a line saying they are not affiliated with or endorsed by the players. 30 minutes a side. Wagers from $1 to $100. A win pays 2x and there is no rake. Bots never offer or accept draws: the engine sees the full move history (so it knows about repetitions), and if its choice would end the game in a draw it searches again over every non-drawing move and plays the best of those unless that leaves it clearly lost. A draw the player forces anyway returns the wager.
+
+**Chat.** Players in a human game can type messages (up to 200 characters, 3 per 5 seconds) or use quick messages. Only the two players receive them. Your messages are green on the right; your opponent's are blue on the left, with a mute toggle.
 
 **Money.** Everything is in integer cents with a double-entry style ledger (`ledger` table, house rows have `user_id NULL`).
 

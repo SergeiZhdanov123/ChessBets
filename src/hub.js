@@ -1,6 +1,17 @@
 import { WebSocketServer } from 'ws';
 
 export const CHAT_PRESETS = ['Good luck', 'Have fun', 'Good game', 'Well played', 'Thanks', 'Oops'];
+export const CHAT_MAX = 200;
+
+// Typed chat: printable text only, whitespace collapsed, capped in length.
+export function cleanChat(raw) {
+  return String(raw ?? '')
+    .normalize('NFC')
+    .replace(/[\p{Cc}\p{Cf}\p{Co}\p{Cn}]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, CHAT_MAX);
+}
 
 // WebSocket fan-out plus the in-game message handlers.
 export function createHub(ctx) {
@@ -14,7 +25,12 @@ export function createHub(ctx) {
     conns,
     toUser(userId, msg) { for (const c of byUser.get(userId) || []) send(c, msg); },
     // msg may be a function of the connection, for per-viewer snapshots.
-    toGame(gameId, msg) { for (const c of subs.get(gameId) || []) send(c, typeof msg === 'function' ? msg(c) : msg); },
+    toGame(gameId, msg) {
+      for (const c of subs.get(gameId) || []) {
+        const m = typeof msg === 'function' ? msg(c) : msg;
+        if (m) send(c, m);
+      }
+    },
     all(msg) { const s = JSON.stringify(msg); for (const c of conns) if (c.ws.readyState === 1) c.ws.send(s); },
     feed(rows) { if (rows?.length) hub.all({ t: 'feed', rows }); },
     pushBalance(userId) {
@@ -81,10 +97,13 @@ export function createHub(ctx) {
         if (msg.t === 'draw-accept') e = g.acceptDraw(color);
         if (msg.t === 'draw-decline') g.declineDraw(color);
         if (msg.t === 'chat') {
-          if (g.kind !== 'human') return;
-          const text = CHAT_PRESETS[msg.k | 0];
-          const recent = g.chat.filter((c) => c.c === color && Date.now() - c.at < 5000).length;
-          if (text && recent < 2) g.addChat(color, text);
+          if (g.kind !== 'human') return err('Chat is only for games against people');
+          const text = typeof msg.text === 'string' ? cleanChat(msg.text) : CHAT_PRESETS[msg.k | 0];
+          if (!text) return;
+          const mine = g.chat.filter((c) => c.c === color);
+          if (mine.filter((c) => Date.now() - c.at < 5000).length >= 3) return err('Slow down a little', { code: 'chat' });
+          if (mine.length >= 100) return err('Chat limit reached for this game', { code: 'chat' });
+          g.addChat(color, text);
         }
         if (e) err(e);
         return;

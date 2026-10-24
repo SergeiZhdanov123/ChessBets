@@ -133,3 +133,18 @@ export function thinkTime(botId, { ply, clockMs }, scale = 1, rand = Math.random
   if (clockMs < 60_000) t = Math.min(t, 400);
   return Math.max(50, Math.round(t * scale));
 }
+
+// Legal moves that would end the game in a draw on the spot: stalemate,
+// threefold repetition, the 50-move rule, or bare material. Uses the game's
+// own Chess instance (it has the move history) and leaves it unchanged.
+export function drawingMoves(chess) {
+  const out = new Set();
+  for (const m of chess.moves({ verbose: true })) {
+    chess.move(m);
+    if (chess.isStalemate() || chess.isThreefoldRepetition() || chess.isInsufficientMaterial() || chess.isDrawByFiftyMoves()) {
+      out.add(m.from + m.to + (m.promotion || ''));
+    }
+    chess.undo();
+  }
+  return out;
+}

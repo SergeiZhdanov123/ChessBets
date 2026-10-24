@@ -53,17 +53,20 @@ export class Engine {
     });
   }
 
-  // search({ fen, movetime | nodes | depth, multipv }) -> { best, lines: [{ move, cp, mate, pv, depth }] }
-  search({ fen, movetime, nodes, depth, multipv = 1 }) {
+  // search({ fen | moves, movetime | nodes | depth, multipv, searchmoves }) -> { best, lines: [{ move, cp, mate, pv, depth }] }
+  // Passing the game's moves (from the start position) instead of a FEN lets
+  // the engine see repetitions.
+  search({ fen, moves, movetime, nodes, depth, multipv = 1, searchmoves }) {
     const job = async () => {
       await this.ready;
       if (multipv !== this.multipv) {
         this.send(`setoption name MultiPV value ${multipv}`);
         this.multipv = multipv;
       }
-      this.send(`position fen ${fen}`);
+      this.send(moves ? `position startpos${moves.length ? ` moves ${moves.join(' ')}` : ''}` : `position fen ${fen}`);
       const lines = [];
-      const go = movetime ? `go movetime ${Math.max(10, Math.round(movetime))}` : nodes ? `go nodes ${nodes}` : `go depth ${depth || 12}`;
+      let go = movetime ? `go movetime ${Math.max(10, Math.round(movetime))}` : nodes ? `go nodes ${nodes}` : `go depth ${depth || 12}`;
+      if (searchmoves?.length) go += ` searchmoves ${searchmoves.join(' ')}`;
       const bestLine = await this.waitFor((l) => l.startsWith('bestmove'), go, (line) => {
         if (!line.startsWith('info') || !line.includes(' pv ')) return;
         const info = parseInfo(line);
