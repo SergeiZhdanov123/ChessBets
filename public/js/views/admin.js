@@ -29,7 +29,7 @@ export default function admin(el, [userId]) {
         <table class="table"><tbody>${Object.entries(HOUSE_LABEL).map(([k, label]) => `<tr><td>${label}</td><td class="r num">${house[k]?.n || 0}</td><td class="r num strong">${money(house[k]?.total || 0, { sign: true })}</td></tr>`).join('')}</tbody></table>
       </div>
 
-      ${pay.mode === 'bcon' ? paymentsHtml(pay) : ''}
+      ${pay.mode === 'crypto' ? paymentsHtml(pay) : ''}
 
       <div class="section-head"><h2>${icon('search')}Find a player</h2></div>
       <div style="display:flex;gap:8px;margin-bottom:10px"><input class="input" id="q" placeholder="Username" style="max-width:320px"><button class="btn btn-gray" id="qs">Search</button></div>
@@ -48,7 +48,7 @@ export default function admin(el, [userId]) {
       <div class="section-head" style="margin-top:24px"><h2>${icon('help')}Support tickets</h2></div>
       <div id="tk">${t.tickets.length ? '' : '<div class="empty card">No tickets.</div>'}</div>`;
 
-    if (pay.mode === 'bcon') wirePayments(box, load);
+    if (pay.mode === 'crypto') wirePayments(box, load);
     const tk = box.querySelector('#tk');
     tk.innerHTML += t.tickets.map((x) => `
       <div class="ticket">
@@ -72,21 +72,22 @@ export default function admin(el, [userId]) {
   load().catch((e) => { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
 }
 
-const PAY_STATUS = { unmatched: 'Not matched', held: 'On hold (account suspended)', pending: 'Waiting on Bcon' };
+const PAY_STATUS = { unmatched: 'Not matched', held: 'On hold' };
 
 function paymentsHtml(p) {
-  const st = p.store;
-  const hook = `${location.origin}${st.callbackPath}`;
-  const chains = st.chains.map((c) => `<tr><td class="strong">${esc(c.chain)}</td><td class="num">${esc(c.wallet || '')}</td><td>${c.callbackOk ? '<span class="status ok">Callback set</span>' : '<span class="status bad">Callback URL missing</span>'}</td></tr>`).join('');
+  const w = p.wallets;
+  const b = w.btc;
   return `
     <div class="section-head"><h2>${icon('wallet')}Payments</h2></div>
     <div class="card card-pad" style="margin-bottom:18px">
-      ${st.connected
-        ? `<h3 style="font-size:15px;margin-bottom:8px">Bcon store ${esc(st.name || '')}</h3>
-           ${chains ? `<table class="table"><tbody>${chains}</tbody></table>` : '<div class="callout red">The store has no wallets yet. Add a Bitcoin xpub or a wallet address in the Bcon dashboard.</div>'}`
-        : '<div class="callout red">Not connected to Bcon. Check BCON_API_KEY, and that the Bcon account has a store with at least one wallet. Deposits are off until then.</div>'}
-      <div class="field-label" style="margin:12px 0 6px">Callback URL for every chain in the Bcon store settings</div>
-      <div style="display:flex;gap:8px"><input class="input num" readonly value="${esc(hook)}" id="hook"><button class="btn btn-gray" id="hook-cp">${icon('copy')}Copy</button></div>
+      <table class="table"><tbody>
+        ${b ? `<tr><td class="strong">Bitcoin ${b.network === 'main' ? '' : '(testnet)'}</td><td class="num">${esc(b.xpub)}</td><td>${b.assigned} address${b.assigned === 1 ? '' : 'es'} given out</td></tr>
+          <tr><td>First address</td><td class="num" style="word-break:break-all;white-space:normal">${esc(b.firstAddress)}</td><td class="dim" style="white-space:normal">Must match the first receiving address in your wallet app${b.firstIndex ? ` (index ${b.firstIndex})` : ''}</td></tr>` : ''}
+        ${w.tron ? `<tr><td class="strong">USDT on Tron</td><td class="num" style="word-break:break-all;white-space:normal">${esc(w.tron.address)}</td><td></td></tr>` : ''}
+        <tr><td>Last check of the chain</td><td>${w.lastScan ? dateTime(w.lastScan) : 'not yet'}</td><td>${w.price ? `BTC ${money(Math.round(w.price * 100))}` : ''}</td></tr>
+      </tbody></table>
+      ${w.lastError ? `<div class="callout red">Last check failed: ${esc(w.lastError)}</div>` : ''}
+      ${b && b.gap >= 15 ? `<div class="callout">${b.gap} bitcoin addresses past the last one that received money. Wallet apps stop looking 20 addresses past the last used one, so coins sent there won't show in your wallet until it generates that many addresses. In Electrum: View > Show Console, then type <span class="num">[wallet.create_new_address(False) for i in range(${Math.ceil((b.gap + 10) / 10) * 10})]</span>.</div>` : ''}
     </div>
 
     <h3 style="font-size:15px;margin:0 0 8px">Withdrawals to send <span class="dim">${p.withdrawals.length}</span></h3>
@@ -119,10 +120,6 @@ function paymentsHtml(p) {
 }
 
 function wirePayments(box, reload) {
-  box.querySelector('#hook-cp').onclick = async (e) => {
-    try { await navigator.clipboard.writeText(box.querySelector('#hook').value); } catch {}
-    e.currentTarget.innerHTML = `${icon('check')}Copied`;
-  };
   box.querySelectorAll('[data-copy]').forEach((b) => (b.onclick = async () => {
     try { await navigator.clipboard.writeText(b.dataset.copy); } catch {}
     b.innerHTML = icon('check');
@@ -163,7 +160,7 @@ async function userPage(el, id) {
         : `<button class="btn btn-red" data-act="suspend">Suspend</button>${u.review ? '<button class="btn btn-gray" data-act="clear">Clear review</button>' : ''}`}
     </div>
 
-    ${store.config?.payments === 'bcon' && u.status !== 'suspended' ? `
+    ${store.config?.payments === 'crypto' && u.status !== 'suspended' ? `
     <div class="section-head"><h2>${icon('wallet')}Credit a deposit</h2></div>
     <div class="card card-pad" style="margin-bottom:22px">
       <p class="fine" style="margin-bottom:10px">For a payment that reached our wallet but wasn't matched, for example a short amount after an exchange fee. Check it on a block explorer first. Each transaction id can be credited once.</p>

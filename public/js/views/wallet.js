@@ -10,13 +10,13 @@ let state = { tab: 'deposit', coin: null, wcoin: null, data: null, invoice: null
 
 export function openWallet(tab) {
   if (tab) state.tab = tab;
-  const live = store.config?.payments === 'bcon';
+  const live = store.config?.payments === 'crypto';
   const m = openModal({
     title: 'Wallet', iconName: 'wallet', width: 520, body: '<div class="skel" style="height:260px"></div>',
     foot: live
-      ? 'Deposits are processed by Bcon Global and credited after 2 network confirmations. Withdrawals are checked and sent by staff.'
+      ? 'Deposits go straight to our own wallets and are credited once the network confirms them. Withdrawals are checked and sent by staff.'
       : 'Paper money. Deposits and withdrawals are simulated and nothing leaves this site.',
-    onClose: () => { offs.forEach((f) => f()); clearInterval(tick); state.invoice = null; },
+    onClose: () => { offs.forEach((f) => f()); clearInterval(tick); clearInterval(look); state.invoice = null; },
   });
   const offs = [
     bus.on('wallet', (msg) => {
@@ -36,6 +36,24 @@ export function openWallet(tab) {
     const el = m.body.querySelector('#inv-left');
     if (el && state.invoice) el.textContent = leftText(state.invoice.expires_at);
   }, 15_000);
+  // While someone is looking at a deposit address, ask the server to check
+  // the chain every 20 seconds so the payment shows up without a reload.
+  const look = setInterval(() => {
+    if (live && state.tab === 'deposit' && m.body.querySelector('[data-watching]') && !document.hidden) checkNow(false);
+  }, 20_000);
+
+  async function checkNow(manual) {
+    const btn = m.body.querySelector('#chk');
+    if (btn) { btn.disabled = true; btn.textContent = 'Checking...'; }
+    try {
+      const r = await api('/api/wallet/refresh', {});
+      state.data = { ...state.data, deposits: r.deposits, withdrawals: r.withdrawals, ledger: r.ledger };
+      if (r.user) store.set({ user: { ...store.user, ...r.user } });
+      if (state.invoice) await refreshInvoice();
+      paintLists();
+    } catch (e) { if (manual) toast(e.message, { kind: 'bad' }); }
+    if (btn && btn.isConnected) { btn.disabled = false; btn.textContent = 'Check for payment'; }
+  }
 
   async function load(full = true) {
     try {
@@ -145,6 +163,7 @@ export function openWallet(tab) {
   // ---- real deposits ----
   function liveDepositPane(pane) {
     const coin = state.data.coins.find((c) => c.code === state.coin);
+    if (coin.ownAddress) return btcPane(pane, coin);
     const min = state.data.minDeposit;
     pane.innerHTML = `
       <div class="field-label" style="margin-bottom:8px">Currency</div>
@@ -191,6 +210,34 @@ export function openWallet(tab) {
     paintLists();
   }
 
+  // Bitcoin: one address per player, any amount, priced when it confirms.
+  async function btcPane(pane, coin) {
+    pane.innerHTML = `
+      <div class="field-label" style="margin-bottom:8px">Currency</div>
+      ${coinGrid(state.coin, 'data-coin')}
+      <div class="field-label" style="margin-bottom:8px">Your bitcoin deposit address <span class="aside">${esc(coin.network)}</span></div>
+      <div class="addr-box" data-watching><div class="qr skel"></div><div class="row"><div class="addr skel" style="height:34px"></div></div></div>
+      <p class="fine" style="margin:10px 0 0">Send any amount${coin.rate ? ` (1 BTC is about ${money(Math.round(coin.rate * 100)).replace(/\.\d\d$/, '')})` : ''}. It is credited in dollars at the bitcoin price when it reaches ${coin.confirmations} confirmations, usually 10 to 30 minutes. This address stays yours, so you can use it again.</p>
+      <div class="callout">Send only bitcoin, on the Bitcoin network. Other coins or networks sent here are lost.</div>
+      <button class="btn btn-gray btn-block" id="chk">Check for payment</button>
+      <h4 style="margin:22px 0 4px;font-size:14px">Recent deposits</h4>
+      <div id="wl-deps"></div>`;
+    pane.querySelectorAll('[data-coin]').forEach((b) => (b.onclick = () => { state.coin = b.dataset.coin; liveDepositPane(pane); }));
+    pane.querySelector('#chk').onclick = () => checkNow(true);
+    paintLists();
+    try {
+      const a = await api('/api/wallet/address', { coin: coin.code });
+      if (state.coin !== coin.code || !pane.isConnected) return;
+      pane.querySelector('.addr-box').innerHTML = `
+        <div class="qr">${a.qr}</div>
+        <div class="row">
+          <div class="addr">${esc(a.address)}</div>
+          <button class="btn btn-gray btn-sm" id="cp" style="align-self:flex-start">${icon('copy')}Copy address</button>
+        </div>`;
+      copyButton(pane.querySelector('#cp'), a.address, 'Copy address');
+    } catch (err) { toast(err.message, { kind: 'bad' }); }
+  }
+
   async function refreshInvoice() {
     try {
       const r = await api(`/api/wallet/deposits/${state.invoice.id}`);
@@ -210,7 +257,6 @@ export function openWallet(tab) {
 
   function invoicePane(pane) {
     const d = state.invoice;
-    const own = d.coin === 'BTC';
     const status = {
       awaiting: `<div class="status wait">Waiting for your payment. <span id="inv-left">${leftText(d.expires_at)}</span></div>`,
       expired: '<div class="status">This address has expired. Start a new deposit, or if you already sent the payment, contact support with the transaction id.</div>',
@@ -225,7 +271,7 @@ export function openWallet(tab) {
         ${coinIcon(d.label)}<b class="num" id="inv-amt">${esc(d.coin_amount)}</b><span>${esc(d.label)}</span>
         <button class="btn btn-gray btn-sm" id="cp-amt">${icon('copy')}Copy</button>
       </div>
-      <p class="fine" style="margin:6px 0 12px">Worth ${money(d.amount)} at the quoted price.</p>
+      <p class="fine" style="margin:6px 0 12px">Credits ${money(d.amount)}${d.coin_amount !== (d.amount / 100).toFixed(2) ? '. The extra cent tells your payment apart from someone else\'s.' : '.'}</p>
       <div class="field-label" style="margin-bottom:6px">To this address</div>
       <div class="addr-box">
         <div class="qr">${d.qr || ''}</div>
@@ -234,12 +280,12 @@ export function openWallet(tab) {
           <button class="btn btn-gray btn-sm" id="cp-addr" style="align-self:flex-start">${icon('copy')}Copy address</button>
         </div>
       </div>
-      <div style="margin:14px 0 4px">${status}</div>
-      ${own
-        ? `<div class="callout">Send only Bitcoin, on the Bitcoin network. This address is for this deposit only. Coins sent from another network are lost.</div>`
-        : `<div class="callout">Send exactly ${esc(d.coin_amount)} ${esc(d.label)} on ${esc(d.network)}, nothing else. The exact amount is how your payment is matched to your account. If your exchange takes its fee out of the amount it sends, the deposit won't match automatically: send the amount plus the fee, or contact support with the transaction id.</div>`}
+      <div style="margin:14px 0 4px" ${d.status === 'awaiting' || d.status === 'expired' ? 'data-watching' : ''}>${status}</div>
+      <div class="callout">Send exactly ${esc(d.coin_amount)} ${esc(d.label)} on ${esc(d.network)}, nothing else. The exact amount is how your payment is matched to your account. If your exchange takes its fee out of the amount it sends, the deposit won't match automatically: send the amount plus the fee, or contact support with the transaction id.</div>
+      ${d.status === 'awaiting' || d.status === 'expired' ? '<button class="btn btn-gray btn-block" id="chk">Check for payment</button>' : ''}
     `;
     pane.querySelector('#inv-back').onclick = () => { state.invoice = null; liveDepositPane(pane); };
+    pane.querySelector('#chk')?.addEventListener('click', () => checkNow(true));
     copyButton(pane.querySelector('#cp-amt'), d.coin_amount, 'Copy');
     copyButton(pane.querySelector('#cp-addr'), d.address, 'Copy address');
   }
@@ -316,7 +362,7 @@ export function openWallet(tab) {
     const d = state.data;
     if (!d) return;
     const open = m.body.querySelector('#wl-open');
-    const waiting = d.deposits.filter((x) => x.kind === 'bcon' && (x.status === 'awaiting' || x.status === 'confirming'));
+    const waiting = d.deposits.filter((x) => x.kind === 'invoice' && (x.status === 'awaiting' || x.status === 'confirming'));
     if (open) open.innerHTML = waiting.length ? `
       <h4 style="margin:22px 0 4px;font-size:14px">Waiting for payment</h4>
       ${waiting.map((x) => `
@@ -328,11 +374,11 @@ export function openWallet(tab) {
     const deps = m.body.querySelector('#wl-deps');
     const shown = d.deposits.filter((x) => !waiting.includes(x)).slice(0, 6);
     if (deps) deps.innerHTML = shown.length ? shown.map((x) => `
-      <${x.kind === 'bcon' ? `button class="tx tx-btn" data-inv="${x.id}"` : 'div class="tx"'}>
+      <${x.kind === 'invoice' ? `button class="tx tx-btn" data-inv="${x.id}"` : 'div class="tx"'}>
         ${coinIcon(x.label || x.coin || '?')}
         <div class="k"><div>${x.coin_amount ? `${esc(x.coin_amount)} ${esc(x.label || x.coin)}` : esc(x.kind === 'manual' ? 'Credited by staff' : x.label || '')}</div><span>${ago(x.created_at)}</span></div>
-        <div class="amt num">${money(x.status === 'credited' && x.credited != null ? x.credited : x.amount)}${depositStatus(x)}</div>
-      </${x.kind === 'bcon' ? 'button' : 'div'}>`).join('') : '<div class="empty" style="padding:18px">No deposits yet</div>';
+        <div class="amt num">${x.kind === 'chain' && x.status === 'confirming' ? (x.amount ? `about ${money(x.amount)}` : '') : money(x.status === 'credited' && x.credited != null ? x.credited : x.amount)}${depositStatus(x)}</div>
+      </${x.kind === 'invoice' ? 'button' : 'div'}>`).join('') : '<div class="empty" style="padding:18px">No deposits yet</div>';
     m.body.querySelectorAll('[data-inv]').forEach((b) => (b.onclick = () => showInvoice(+b.dataset.inv)));
     const wds = m.body.querySelector('#wl-wds');
     if (wds) wds.innerHTML = d.withdrawals.length ? d.withdrawals.slice(0, 6).map((x) => `

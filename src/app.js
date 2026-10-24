@@ -12,6 +12,7 @@ import { createGames, feedShape } from './games.js';
 import { createMatchmaker } from './matchmaking.js';
 import { createEnforcement } from './enforcement.js';
 import { createWallet } from './wallet.js';
+import { btcWallet, tronAddressOk } from './chain.js';
 import { FairPlay, MODEL, accountEvidence } from './anticheat.js';
 import { botList, BOTS } from './bots.js';
 
@@ -58,17 +59,42 @@ function limiter(max, windowMs) {
   };
 }
 
+// Paper and real balances never share a database: a paper balance must not
+// become withdrawable money. The first start records the mode; starting the
+// other mode on that database is refused.
+async function checkMode(db) {
+  const counters = db.raw.collection('counters');
+  const mark = await counters.findOne({ _id: 'payments_mode' });
+  const name = db.raw.databaseName;
+  if (mark && mark.mode !== config.payments) {
+    throw new Error(mark.mode === 'paper'
+      ? `Database "${name}" holds paper-money accounts, so it can't take real payments. Set MONGODB_DB to a new name for real money (for example ${name}_real).`
+      : `Database "${name}" holds real-money accounts, so it can't run on paper money. Use a different MONGODB_DB for paper money.`);
+  }
+  if (!mark) {
+    if (config.payments === 'crypto' && (await db.deposits.count({ kind: { $exists: false } }))) {
+      throw new Error(`Database "${name}" has paper-money deposits in it. Set MONGODB_DB to a new name for real money (for example ${name}_real).`);
+    }
+    await counters.updateOne({ _id: 'payments_mode' }, { $setOnInsert: { mode: config.payments, at: Date.now() } }, { upsert: true });
+  }
+}
+
 const escapeRegex = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export async function createApp(opts = {}) {
-  if (config.payments === 'bcon') {
-    if (!config.bconKey && !opts.bcon) throw new Error('PAYMENTS=bcon needs BCON_API_KEY (the key from your Bcon store settings).');
-    if (config.bconSecret.length < 24 || !/^[A-Za-z0-9_-]+$/.test(config.bconSecret)) {
-      throw new Error('PAYMENTS=bcon needs BCON_CALLBACK_SECRET: 24+ letters, digits, - or _. Generate one with: node -e "console.log(require(\'crypto\').randomBytes(24).toString(\'base64url\'))"');
-    }
+  if (config.payments === 'crypto') {
+    if (!config.btcXpub && !config.tronAddress) throw new Error('PAYMENTS=crypto needs BTC_XPUB, TRON_ADDRESS, or both (see README).');
+    if (config.tronAddress && !tronAddressOk(config.tronAddress)) throw new Error('TRON_ADDRESS is not a valid Tron address (it starts with T).');
+    if (config.btcXpub) btcWallet(config.btcXpub); // throws a readable error for a bad key
   }
-  const ctx = { queueGrace: new Map(), bcon: opts.bcon };
+  const ctx = { queueGrace: new Map() };
   const db = (ctx.db = await openDb({ uri: opts.mongoUri || config.mongoUri, name: opts.dbName || config.mongoDb }));
+  try {
+    await checkMode(db);
+  } catch (e) {
+    await db.close();
+    throw e;
+  }
 
   // Background work (game writes, deposits, analysis) registers here so a
   // shutdown can wait for it before closing the connection.
@@ -208,25 +234,6 @@ export async function createApp(opts = {}) {
   });
 
   app.use('/api', express.json({ limit: '24kb' }));
-
-  // Bcon's payment callback. It can't send our CSRF header, so it sits in
-  // front of that check; the secret in the path keeps strangers out, and
-  // every payment is confirmed with Bcon's API before it counts.
-  const secretHash = sha(config.bconSecret || crypto.randomBytes(16).toString('hex'));
-  app.all('/api/wallet/bcon/callback/:secret', express.urlencoded({ extended: false, limit: '8kb' }), async (req, res) => {
-    const ok = !!config.bconSecret && crypto.timingSafeEqual(Buffer.from(sha(String(req.params.secret))), Buffer.from(secretHash));
-    if (!ok) return res.status(404).json({ error: 'Not found' });
-    // Right secret while still on paper money: answer, so Bcon's dashboard
-    // can check the URL, but don't act on anything.
-    if (config.payments !== 'bcon') return res.type('text/plain').send('ok paper');
-    try {
-      const r = await ctx.track(ctx.wallet.notify({ ...req.query, ...(req.body && typeof req.body === 'object' ? req.body : {}) }));
-      res.type('text/plain').send(`ok ${r}`);
-    } catch (e) {
-      console.error('bcon callback', e.message);
-      res.status(503).type('text/plain').send('retry');
-    }
-  });
 
   // CSRF: state-changing calls must carry a header a cross-site form cannot set.
   app.use('/api', (req, res, next) => {
@@ -399,8 +406,14 @@ export async function createApp(opts = {}) {
   app.get('/api/wallet', needUser, wrap(async (req, res) => {
     res.json({
       ...(await ctx.wallet.overview(req.user.id)), user: await publicUser(req.user), coins: ctx.wallet.coins(), payments: config.payments,
-      feeBps: config.withdrawFeeBps, minWithdraw: config.minWithdraw, minDeposit: config.bconMinDeposit, maxDeposit: config.bconMaxDeposit,
+      feeBps: config.withdrawFeeBps, minWithdraw: config.minWithdraw, minDeposit: config.cryptoMinDeposit, maxDeposit: config.cryptoMaxDeposit,
     });
+  }));
+  // "Check for my payment": scans this player's addresses now (at most
+  // every 10 seconds) instead of waiting for the next sweep.
+  app.post('/api/wallet/refresh', needUser, wrap(async (req, res) => {
+    try { await ctx.wallet.refresh(req.user.id); } catch (e) { console.error('wallet refresh', e.message); }
+    res.json({ ...(await ctx.wallet.overview(req.user.id)), user: await freshUser(req.user.id) });
   }));
   app.get('/api/wallet/deposits/:id', needUser, wrap(async (req, res) => {
     res.json({ deposit: await ctx.wallet.invoice(req.user.id, Number(req.params.id)) });

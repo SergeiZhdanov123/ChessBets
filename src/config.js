@@ -2,6 +2,7 @@ import os from 'node:os';
 
 const env = process.env;
 const num = (v, d) => (v === undefined || v === '' ? d : Number(v));
+const list = (v) => String(v || '').split(',').map((x) => x.trim().replace(/\/+$/, '')).filter(Boolean);
 const HOUR = 3600_000;
 
 export const config = {
@@ -48,20 +49,25 @@ export const config = {
   analysisEngines: num(env.ANALYSIS_ENGINES, 2),
   analysisNodes: num(env.ANALYSIS_NODES, 500_000),
 
-  // Payments. 'paper' simulates deposits and withdrawals; 'bcon' takes real
-  // crypto through Bcon Global (see src/bcon.js and the README).
-  payments: env.PAYMENTS === 'bcon' ? 'bcon' : 'paper',
-  bconKey: env.BCON_API_KEY || env.BCON || '',
-  bconSecret: env.BCON_CALLBACK_SECRET || '',
-  bconApi: (env.BCON_API_URL || 'https://external-api.bcon.global').replace(/\/+$/, ''),
-  bconStoreId: env.BCON_STORE_ID || '',
-  bconChains: (env.BCON_CHAINS || '').split(',').map((s) => s.trim()).filter(Boolean),
-  bconCoins: (env.BCON_COINS || '').split(',').map((s) => s.trim().toUpperCase()).filter(Boolean),
-  bconMinDeposit: num(env.BCON_MIN_DEPOSIT, 1000),
-  bconMaxDeposit: num(env.BCON_MAX_DEPOSIT, 500_000),
-  bconInvoiceMs: num(env.BCON_INVOICE_MS, 60 * 60_000),
-  bconPollMs: num(env.BCON_POLL_MS, 3 * 60_000),
-  bconOpenInvoices: 3,
+  // Payments. 'paper' simulates deposits and withdrawals; 'crypto' takes
+  // real Bitcoin and USDT (Tron) into the site's own wallets, watched
+  // through public block explorers (see src/chain.js and the README).
+  payments: env.PAYMENTS === 'crypto' ? 'crypto' : 'paper',
+  btcXpub: (env.BTC_XPUB || '').trim(),
+  btcStartIndex: num(env.BTC_START_INDEX, 0),
+  btcConfirmations: num(env.BTC_CONFIRMATIONS, 2),
+  btcApis: list(env.BTC_API),               // default depends on mainnet/testnet
+  btcPriceUrls: list(env.BTC_PRICE_URLS).length ? list(env.BTC_PRICE_URLS) : ['https://mempool.space/api/v1/prices', 'https://api.coinbase.com/v2/prices/BTC-USD/spot'],
+  btcMinCredit: num(env.BTC_MIN_CREDIT, 100),
+  tronAddress: (env.TRON_ADDRESS || '').trim(),
+  tronApi: (env.TRON_API || 'https://api.trongrid.io').replace(/\/+$/, ''),
+  tronApiKey: env.TRONGRID_API_KEY || '',
+  usdtContract: env.TRON_USDT_CONTRACT || 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
+  cryptoMinDeposit: num(env.MIN_DEPOSIT, 1000),
+  cryptoMaxDeposit: num(env.MAX_DEPOSIT, 500_000),
+  invoiceMs: num(env.INVOICE_MS, 60 * 60_000),
+  cryptoPollMs: num(env.CRYPTO_POLL_MS, 60_000),
+  openInvoices: 3,
 
   depositConfirmMs: num(env.DEPOSIT_CONFIRM_MS, 1500),
   withdrawProcessMs: num(env.WITHDRAW_PROCESS_MS, 2500),

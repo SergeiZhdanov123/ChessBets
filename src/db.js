@@ -25,9 +25,9 @@ const INDEXES = {
   scheduled_actions: [[{ status: 1, run_at: 1 }], [{ user_id: 1, status: 1 }]],
   deposit_addresses: [[{ user_id: 1, coin: 1 }, { unique: true }], [{ address: 1 }, { unique: true }]],
   deposits: [[{ user_id: 1, _id: -1 }], [{ status: 1 }], [{ kind: 1, status: 1, created_at: 1 }], [{ address: 1 }]],
-  // One document per on-chain transaction Bcon reported (keyed by txid), so
-  // a payment is credited at most once whatever order the news arrives in.
-  payments: [[{ status: 1, updated_at: -1 }], [{ invoice_id: 1 }]],
+  // One document per payment seen on chain (btc:<txid>:<address>,
+  // trx:<txid>, manual:<txid>), so each is credited at most once.
+  payments: [[{ status: 1, updated_at: -1 }], [{ txid: 1 }]],
   withdrawals: [[{ user_id: 1, _id: -1 }], [{ status: 1 }]],
   tickets: [[{ user_id: 1, updated_at: -1 }], [{ status: 1, updated_at: -1 }]],
   counters: [],

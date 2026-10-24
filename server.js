@@ -29,7 +29,7 @@ server.on('error', (err) => {
 });
 
 server.listen(config.port, config.host, () => {
-  console.log(`ChessBets (${config.payments === 'bcon' ? 'crypto payments via Bcon' : 'paper money'}) running at http://localhost:${config.port} (database "${config.mongoDb}")`);
+  console.log(`ChessBets (${config.payments === 'crypto' ? 'real crypto payments' : 'paper money'}) running at http://localhost:${config.port} (database "${config.mongoDb}")`);
 });
 
 let closing = false;

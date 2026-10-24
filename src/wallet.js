@@ -2,13 +2,13 @@ import crypto from 'node:crypto';
 import QRCode from 'qrcode';
 import { config } from './config.js';
 import { MoneyError, withdrawFeeOf } from './money.js';
-import { BCON_COINS, createBcon, ownAddress, sameAddress, units } from './bcon.js';
+import { btcWallet, btcAddressOk, tronAddressOk, esplora, btcPrice, tronGrid, toUnits, satsToBtc } from './chain.js';
 
 // Two modes. With PAYMENTS=paper (the default) nothing touches a real chain:
 // deposit addresses are deliberately not valid on any network so nobody can
 // lose real funds by sending to one, and rates are fixed reference prices.
-// With PAYMENTS=bcon, deposits are real payments through Bcon Global and
-// withdrawals are sent by staff from Admin.
+// With PAYMENTS=crypto, deposits are real Bitcoin and USDT (Tron) paid into
+// the site's own wallets, and withdrawals are sent by staff from Admin.
 export const COINS = {
   BTC: { name: 'Bitcoin', network: 'Bitcoin', rate: 100_000, decimals: 8, confirmations: 2, re: /^(bc1[a-z0-9]{25,62}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})$/ },
   ETH: { name: 'Ethereum', network: 'Ethereum', rate: 3_500, decimals: 6, confirmations: 3, re: /^0x[a-fA-F0-9]{40}$/ },
@@ -35,47 +35,68 @@ function demoAddress(coin) {
 }
 
 const DAY = 86_400_000;
+const EXPLORERS = {
+  main: ['https://mempool.space/api', 'https://blockstream.info/api'],
+  test: ['https://mempool.space/testnet/api', 'https://blockstream.info/testnet/api'],
+};
+const USDT = 'USDT-TRC20';
 // A payment in one of these states has been dealt with and is never
 // credited again.
-const SETTLED = ['credited', 'held', 'manual'];
+const SETTLED = ['credited', 'held', 'manual', 'resolved'];
 
 export function createWallet(ctx) {
   const { db, money, hub } = ctx;
   const now = () => Date.now();
   const txid = () => 'demo' + crypto.randomBytes(30).toString('hex');
-  const live = config.payments === 'bcon';
-  const bcon = live
-    ? ctx.bcon || createBcon({ key: config.bconKey, base: config.bconApi, storeId: config.bconStoreId, chains: config.bconChains })
-    : null;
+  const live = config.payments === 'crypto';
+
+  const btc = live && config.btcXpub ? btcWallet(config.btcXpub) : null;
+  const btcApi = btc ? esplora(config.btcApis.length ? config.btcApis : EXPLORERS[btc.net]) : null;
+  const price = btcPrice(config.btcPriceUrls);
+  const tron = live && config.tronAddress ? tronGrid({ base: config.tronApi, apiKey: config.tronApiKey, contract: config.usdtContract }) : null;
+  // Addresses belong to one xpub; a new xpub starts a fresh set.
+  const btcKey = btc ? `btc:${crypto.createHash('sha256').update(config.btcXpub).digest('hex').slice(0, 12)}` : null;
+  const watch = { lastScan: null, lastError: null };
 
   function coins() {
     if (!live) return coinList();
-    const chains = new Set(bcon.enabledChains());
-    return Object.entries(BCON_COINS)
-      .filter(([code, c]) => chains.has(c.chain) && (!config.bconCoins.length || config.bconCoins.includes(code)))
-      .map(([code, c]) => ({
-        code, label: c.label, name: c.name, network: c.network, decimals: c.decimals, confirmations: 2,
-        rate: c.stable ? 1 : bcon.cachedRate(c.ticker), stable: !!c.stable, ownAddress: ownAddress(code),
-      }));
+    const out = [];
+    if (btc) {
+      out.push({
+        code: 'BTC', label: 'BTC', name: 'Bitcoin', network: btc.net === 'main' ? 'Bitcoin' : 'Bitcoin testnet', decimals: 8,
+        confirmations: config.btcConfirmations, rate: price.cached, ownAddress: true,
+      });
+    }
+    if (tron) out.push({ code: USDT, label: 'USDT', name: 'Tether', network: 'Tron (TRC-20)', decimals: 2, confirmations: 1, rate: 1, stable: true, ownAddress: false });
+    return out;
   }
-  const coinDef = (code) => (live ? BCON_COINS[code] : COINS[code]);
-  const label = (code) => (live ? BCON_COINS[code]?.label : code) || code;
+  const coinInfo = (code) => coins().find((c) => c.code === code);
+  const label = (code) => coinInfo(code)?.label || String(code || '').split('-')[0];
 
   function checkCoin(code) {
-    if (coins().some((c) => c.code === code)) return;
-    if (live && !coins().length) throw new MoneyError('unavailable', 'Crypto payments are unavailable right now. Try again shortly.');
+    if (coinInfo(code)) return;
     throw new MoneyError('bad_coin', 'Unsupported currency');
   }
+  function validAddress(code, a) {
+    if (!live) return COINS[code].re.test(a);
+    if (code === 'BTC') return btcAddressOk(a, btc.net);
+    if (code === USDT) return tronAddressOk(a);
+    return false;
+  }
   function coinAmount(cents, code) {
-    const c = coins().find((x) => x.code === code);
+    const c = coinInfo(code);
     return c?.rate ? (cents / 100 / c.rate).toFixed(c.decimals) : null;
   }
+  const qr = (text) => QRCode.toString(text, { type: 'svg', margin: 1, color: { dark: '#0f212eff', light: '#ffffffff' } });
 
-  // ---------------------------------------------------------------- paper
+  // ---------------------------------------------------------- addresses
 
+  // Paper: one made-up address per coin. Live bitcoin: the next address
+  // from the xpub, kept for that player from then on.
   async function address(userId, coin) {
-    if (live) throw new MoneyError('bad_request', 'Choose an amount to get a deposit address');
     checkCoin(coin);
+    if (live && coin !== 'BTC') throw new MoneyError('bad_request', 'Choose an amount to get a deposit address');
+    if (live) return ctx.userLock(userId, () => btcAddress(userId));
     let row = await db.deposit_addresses.findOne({ user_id: userId, coin });
     if (!row) {
       const addr = demoAddress(coin);
@@ -90,7 +111,23 @@ export function createWallet(ctx) {
     return { coin, address: row.address, qr: await qr(row.address) };
   }
 
-  const qr = (text) => QRCode.toString(text, { type: 'svg', margin: 1, color: { dark: '#0f212eff', light: '#ffffffff' } });
+  async function btcAddress(userId) {
+    const t = now();
+    let row = await db.deposit_addresses.findOne({ user_id: userId, coin: btcKey });
+    if (row) {
+      await db.deposit_addresses.update({ _id: row.id }, { $set: { last_shown_at: t } });
+    } else {
+      const index = config.btcStartIndex + (await db.nextId(btcKey)) - 1;
+      row = { address: btc.address(index), index };
+      await db.deposit_addresses.insert({ user_id: userId, coin: btcKey, address: row.address, index, created_at: t, last_shown_at: t });
+    }
+    return {
+      coin: 'BTC', address: row.address, qr: await qr(`bitcoin:${row.address}`),
+      confirmations: config.btcConfirmations, minimum: config.btcMinCredit, rate: price.cached,
+    };
+  }
+
+  // ------------------------------------------------------- paper deposits
 
   // Simulates an incoming transfer: it shows up unconfirmed, ticks through
   // confirmations, then credits the balance.
@@ -141,36 +178,40 @@ export function createWallet(ctx) {
     hub.pushBalance(d.user_id);
   }
 
-  // ----------------------------------------------------------------- bcon
+  // ------------------------------------------------- USDT deposit requests
 
-  // Opens a deposit for a dollar amount. Bitcoin gets its own address; on
-  // the other chains the exact coin amount is what identifies the deposit.
-  async function openDeposit(user, coin, amount) {
+  // Everyone pays USDT into the same Tron address, so each open request
+  // gets its own exact amount: $25 becomes 25.00, the next $25 25.01.
+  async function openInvoice(user, coin, amount) {
     checkCoin(coin);
+    if (coin !== USDT) throw new MoneyError('bad_request', 'Bitcoin deposits use your address, any amount');
     if (user.status !== 'active') throw new MoneyError('suspended', 'Account suspended');
-    if (!Number.isInteger(amount) || amount < config.bconMinDeposit) throw new MoneyError('bad_amount', `Minimum deposit is $${(config.bconMinDeposit / 100).toFixed(2)}`);
-    if (amount > config.bconMaxDeposit) throw new MoneyError('bad_amount', `Maximum deposit is $${(config.bconMaxDeposit / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`);
-    const open = await db.deposits.find(
-      { user_id: user.id, kind: 'bcon', status: 'awaiting', expires_at: { $gt: now() } },
+    if (!Number.isInteger(amount) || amount < config.cryptoMinDeposit) throw new MoneyError('bad_amount', `Minimum deposit is $${(config.cryptoMinDeposit / 100).toFixed(2)}`);
+    if (amount > config.cryptoMaxDeposit) throw new MoneyError('bad_amount', `Maximum deposit is $${(config.cryptoMaxDeposit / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`);
+    const mine = await db.deposits.find(
+      { user_id: user.id, kind: 'invoice', status: 'awaiting', expires_at: { $gt: now() } },
       { projection: { coin: 1, amount: 1 } },
     );
-    const same = open.find((d) => d.coin === coin && d.amount === amount);
+    const same = mine.find((d) => d.coin === coin && d.amount === amount);
     if (same) return invoice(user.id, same.id);
-    if (open.length >= config.bconOpenInvoices) throw new MoneyError('too_many', 'You have 3 deposits waiting for payment. Pay one or wait for it to expire.');
+    if (mine.length >= config.openInvoices) throw new MoneyError('too_many', 'You have 3 deposits waiting for payment. Pay one or wait for it to expire.');
 
     const id = await db.nextId('deposits');
-    let addr;
-    try {
-      addr = await bcon.newAddress(coin, amount, `cb-${id}`);
-    } catch (e) {
-      console.error('bcon address', e.message);
-      throw new MoneyError('unavailable', 'Could not get a deposit address right now. Try again in a minute.');
-    }
-    const t = now();
-    await db.deposits.insert({
-      _id: id, kind: 'bcon', user_id: user.id, coin, address: addr.address, amount, coin_amount: addr.amount,
-      credited: 0, status: 'awaiting', txid: null, txids: [], confirmations: 0, required: 2,
-      created_at: t, expires_at: t + config.bconInvoiceMs, seen_at: null, credited_at: null,
+    // db.tx runs one at a time, so two requests can't pick the same amount.
+    await db.tx(async () => {
+      const taken = new Set((await db.deposits.find(
+        { kind: 'invoice', coin, status: { $in: ['awaiting', 'expired'] }, created_at: { $gt: now() - 3 * DAY } },
+        { projection: { coin_amount: 1 } },
+      )).map((d) => d.coin_amount));
+      let cents = amount;
+      while (taken.has((cents / 100).toFixed(2)) && cents < amount + 100) cents++;
+      if (taken.has((cents / 100).toFixed(2))) throw new MoneyError('busy', 'Too many deposits of this amount are open. Try a slightly different amount.');
+      const t = now();
+      await db.deposits.insert({
+        _id: id, kind: 'invoice', user_id: user.id, coin, address: config.tronAddress, amount, coin_amount: (cents / 100).toFixed(2),
+        credited: 0, status: 'awaiting', txid: null, txids: [], confirmations: 0, required: 1,
+        created_at: t, expires_at: t + config.invoiceMs, credited_at: null,
+      });
     });
     return invoice(user.id, id);
   }
@@ -178,194 +219,197 @@ export function createWallet(ctx) {
   async function invoice(userId, id) {
     const d = await db.deposits.findOne({ _id: id, user_id: userId }, { projection: DEPOSIT_FIELDS });
     if (!d) throw Object.assign(new MoneyError('not_found', 'Deposit not found'), { status: 404 });
-    const uri = d.address && d.coin === 'BTC' ? `bitcoin:${d.address}?amount=${d.coin_amount}` : d.address;
-    return { ...d, label: label(d.coin), network: coinDef(d.coin)?.network, qr: d.address ? await qr(uri) : null };
+    return { ...d, label: label(d.coin), network: coinInfo(d.coin)?.network, qr: d.address ? await qr(d.address) : null };
   }
 
-  // Bcon's callback. Only the txid is trusted, and only after Bcon's API
-  // confirms it with our key.
-  async function notify(p) {
-    const id = String(p.txid || '').trim();
-    if (!/^[A-Za-z0-9]{8,128}$/.test(id)) return 'ignored';
-    const ext = /^cb-(\d+)$/.exec(String(p.external_id || ''));
-    try {
-      return await settle(id, { invoiceId: ext ? Number(ext[1]) : null });
-    } catch (e) {
-      // Bcon could not be asked right now. Remember the txid so the sweep
-      // retries it, and let Bcon retry too.
-      await db.payments.update(
-        { _id: id, status: { $nin: SETTLED } },
-        { $set: { updated_at: now(), note: e.message.slice(0, 200) }, $setOnInsert: { status: 'pending', first_seen: now(), invoice_id: ext ? Number(ext[1]) : null } },
-        { upsert: true },
-      ).catch((err) => { if (err.code !== 11000) throw err; });
-      throw e;
-    }
-  }
+  // ------------------------------------------------------------ watching
 
-  // One settle per txid at a time; a callback and the sweep can race.
-  const settling = new Map();
-  function settle(id, hint = {}) {
-    let p = settling.get(id);
+  // One scan per address (or of the Tron wallet) at a time; the sweep and a
+  // player's "check now" can overlap.
+  const scanning = new Map();
+  function once(key, fn) {
+    let p = scanning.get(key);
     if (!p) {
-      p = settleNow(id, hint).finally(() => settling.delete(id));
-      settling.set(id, p);
+      p = fn().finally(() => scanning.delete(key));
+      scanning.set(key, p);
     }
     return p;
   }
 
-  async function settleNow(id, hint) {
-    const known = await db.payments.findOne({ _id: id });
-    if (known && SETTLED.includes(known.status)) return known.status;
-    const hinted = hint.invoiceId ?? known?.invoice_id ?? null;
-    let inv = hinted ? await db.deposits.findOne({ _id: hinted, kind: 'bcon' }) : null;
-    const tx = await bcon.transaction(id, inv ? BCON_COINS[inv.coin]?.chain : undefined);
-    if (!tx.coin) return record(id, tx, null, 'unmatched', `Unknown currency ${tx.currencyId}`);
-    if (!inv || inv.coin !== tx.coin || !sameAddress(tx.coin, inv.address, tx.address)) inv = await findInvoice(tx);
-    if (!inv) return record(id, tx, null, 'unmatched', 'No open deposit matches this payment');
-
-    if (tx.status !== 'confirmed') {
-      await record(id, tx, inv, 'pending');
-      const r = await db.deposits.update(
-        { _id: inv.id, status: { $in: ['awaiting', 'expired'] } },
-        { $set: { status: 'confirming', txid: tx.txid, seen_at: now(), confirmations: tx.status === 'partially_confirmed' ? 1 : 0 } },
-      );
-      if (r.modifiedCount) hub.toUser(inv.user_id, { t: 'wallet', deposit: await depositRow(inv.id) });
-      return 'pending';
+  const scanBtc = (row, tip) => once(`btc|${row.address}`, async () => {
+    for (const t of await btcApi.received(row.address)) {
+      const id = `btc:${t.txid}:${row.address}`;
+      const known = await db.payments.findOne({ _id: id });
+      if (known && SETTLED.includes(known.status)) continue;
+      const conf = t.height ? Math.max(0, tip - t.height + 1) : 0;
+      if (conf < config.btcConfirmations) await btcSeen(row, t, id, known, conf);
+      else await btcCredit(row, t, id, known);
     }
-    return credit(inv, tx, known);
+  });
+
+  // Not confirmed yet: show it to the player as on its way.
+  async function btcSeen(row, t, id, known, conf) {
+    if (known?.deposit_id) {
+      const r = await db.deposits.update({ _id: known.deposit_id, confirmations: { $ne: conf } }, { $set: { confirmations: conf } });
+      if (r.modifiedCount) hub.toUser(row.user_id, { t: 'wallet', deposit: await depositRow(known.deposit_id) });
+      return;
+    }
+    const depId = await db.nextId('deposits');
+    const estimate = price.cached ? Math.floor((t.sats * price.cached) / 1e6) : 0;
+    await db.deposits.insert({
+      _id: depId, kind: 'chain', user_id: row.user_id, coin: 'BTC', address: row.address, amount: estimate, coin_amount: satsToBtc(t.sats),
+      credited: 0, status: 'confirming', txid: t.txid, txids: [t.txid], confirmations: conf, required: config.btcConfirmations,
+      created_at: now(), credited_at: null,
+    });
+    await record(id, { txid: t.txid, coin: 'BTC', address: row.address, sum: satsToBtc(t.sats) }, row.user_id, depId, 'pending');
+    hub.toUser(row.user_id, { t: 'wallet', deposit: await depositRow(depId) });
   }
 
-  async function findInvoice(tx) {
-    if (ownAddress(tx.coin)) {
-      return db.deposits.findOne({ kind: 'bcon', coin: tx.coin, address: tx.address }, { sort: { _id: -1 } });
-    }
-    const want = units(tx.sum);
+  // Confirmed: credited at the bitcoin price right now.
+  async function btcCredit(row, t, id, known) {
+    const usd = await price.get({ fresh: true });
+    const cents = Math.floor((t.sats * usd) / 1e6);
+    const depId = known?.deposit_id ?? (await db.nextId('deposits'));
+    const tx = { txid: t.txid, coin: 'BTC', address: row.address, sum: satsToBtc(t.sats) };
+    const status = await settle(id, tx, row.user_id, depId, cents, async (s) => {
+      const set = {
+        status: s === 'credited' ? 'credited' : 'held', amount: cents, credited: s === 'credited' ? cents : 0,
+        confirmations: config.btcConfirmations, credited_at: now(), note: s === 'small' ? `Below the ${fmtUsd(config.btcMinCredit)} minimum` : null,
+      };
+      if (known?.deposit_id) await db.deposits.update({ _id: depId }, { $set: set });
+      else {
+        await db.deposits.insert({
+          _id: depId, kind: 'chain', user_id: row.user_id, coin: 'BTC', address: row.address, coin_amount: tx.sum, txid: t.txid, txids: [t.txid],
+          required: config.btcConfirmations, created_at: now(), ...set,
+        });
+      }
+    }, `${tx.sum} BTC at ${fmtUsd(Math.round(usd * 100))}`);
+    if (status) hub.toUser(row.user_id, { t: 'wallet', deposit: await depositRow(depId) });
+  }
+
+  const scanTron = () => once('tron', async () => {
     const open = await db.deposits.find(
-      { kind: 'bcon', coin: tx.coin, status: { $in: ['awaiting', 'expired'] }, created_at: { $gt: now() - 3 * DAY } },
+      { kind: 'invoice', coin: USDT, status: { $in: ['awaiting', 'expired'] }, created_at: { $gt: now() - 3 * DAY } },
       { sort: { _id: 1 } },
     );
-    return open.find((d) => sameAddress(tx.coin, d.address, tx.address) && units(d.coin_amount) === want) || null;
-  }
-
-  // Dollar value of a confirmed payment. Paid on time and within 0.5% of
-  // the quote: exactly what was asked. Otherwise pro rata at the quoted
-  // rate, and for a late payment in a volatile coin, at the current rate if
-  // that is lower, so a stale quote can't be cashed in after a price drop.
-  async function valueOf(inv, tx, known) {
-    const paid = units(tx.sum);
-    const asked = units(inv.coin_amount);
-    if (!paid || !asked) return 0;
-    const late = (known?.first_seen ?? now()) > inv.expires_at;
-    const diff = paid > asked ? paid - asked : asked - paid;
-    if (!late && diff * 200n <= asked) return inv.amount;
-    let cents = Number((BigInt(inv.amount) * paid) / asked);
-    const c = BCON_COINS[inv.coin];
-    if (late && !c.stable) {
-      const usd = await bcon.rate(c.ticker, { fresh: true }).catch(() => null);
-      if (usd) cents = Math.min(cents, Math.floor(Number(tx.sum) * usd * 100));
-    }
-    return Math.max(0, cents);
-  }
-
-  async function credit(inv, tx, known) {
-    const cents = await valueOf(inv, tx, known);
-    if (cents < 1) return record(tx.txid, tx, inv, 'unmatched', 'Payment is worth less than a cent');
-    const status = await db.tx(async () => {
-      const done = await db.payments.findOne({ _id: tx.txid }, { projection: { status: 1 } });
-      if (done && SETTLED.includes(done.status)) return null;
-      const u = await db.users.findOne({ _id: inv.user_id }, { projection: { status: 1 } });
-      // Money that reaches a suspended account is parked for staff, not
-      // forfeited: it never entered the balance.
-      const s = u?.status === 'active' ? 'credited' : 'held';
-      await record(tx.txid, tx, inv, s, null, cents);
-      if (s === 'credited') {
-        await money.userEntry(inv.user_id, cents, 'deposit', `deposit:${inv.id}`, `${tx.sum} ${label(inv.coin)}, tx ${tx.txid.slice(0, 12)}`);
+    if (!open.length) return;
+    const since = Math.min(...open.map((d) => d.created_at)) - 10 * 60_000;
+    for (const t of await tron.received(config.tronAddress, since)) {
+      const id = `trx:${t.txid}`;
+      if (await db.payments.findOne({ _id: id }, { projection: { _id: 1 } })) continue;
+      const sum = (Number(t.micro) / 1e6).toFixed(6).replace(/0{1,4}$/, '');
+      const inv = open.find((d) => d.status !== 'credited' && toUnits(d.coin_amount, 6) === t.micro && t.at >= d.created_at - 2 * 60_000);
+      const tx = { txid: t.txid, coin: USDT, address: config.tronAddress, sum };
+      if (!inv) {
+        // Dust is how address-poisoning scams start; only list real money.
+        if (t.micro >= 1_000_000n) await record(id, tx, null, null, 'unmatched', 'No open deposit for this exact amount');
+        continue;
       }
-      await db.deposits.update({ _id: inv.id }, {
-        $set: { status: s === 'credited' || inv.status === 'credited' ? 'credited' : 'held', txid: inv.txid || tx.txid, confirmations: 2, credited_at: now() },
-        $inc: { credited: s === 'credited' ? cents : 0 },
-        $addToSet: { txids: tx.txid },
-      });
+      inv.status = 'credited';
+      const status = await settle(id, tx, inv.user_id, inv.id, inv.amount, (s) => db.deposits.update({ _id: inv.id }, {
+        $set: { status: s === 'credited' ? 'credited' : 'held', credited: s === 'credited' ? inv.amount : 0, txid: t.txid, confirmations: 1, credited_at: now() },
+        $addToSet: { txids: t.txid },
+      }), `${sum} USDT`);
+      if (status) hub.toUser(inv.user_id, { t: 'wallet', deposit: await depositRow(inv.id) });
+    }
+  });
+
+  // Credit one payment, exactly once. Money that reaches a suspended
+  // account is held for staff, not credited or forfeited.
+  async function settle(id, tx, userId, depId, cents, markDeposit, note) {
+    const status = await db.tx(async () => {
+      const done = await db.payments.findOne({ _id: id }, { projection: { status: 1 } });
+      if (done && SETTLED.includes(done.status)) return null;
+      // Staff may already have credited this txid by hand.
+      if (await db.payments.findOne({ txid: tx.txid, status: 'manual' }, { projection: { _id: 1 } })) {
+        await record(id, tx, userId, depId, 'resolved', 'Already credited by staff');
+        return null;
+      }
+      if (cents < (tx.coin === 'BTC' ? config.btcMinCredit : 1)) {
+        await record(id, tx, userId, depId, 'held', `Below the ${fmtUsd(config.btcMinCredit)} minimum`, cents);
+        await markDeposit('small');
+        return 'held';
+      }
+      const u = await db.users.findOne({ _id: userId }, { projection: { status: 1 } });
+      const s = u?.status === 'active' ? 'credited' : 'held';
+      await record(id, tx, userId, depId, s, s === 'held' ? 'Account suspended' : null, cents);
+      if (s === 'credited') await money.userEntry(userId, cents, 'deposit', `deposit:${depId}`, `${note}, tx ${tx.txid.slice(0, 12)}`);
+      await markDeposit(s);
       return s;
     });
-    if (!status) return 'credited';
-    hub.toUser(inv.user_id, { t: 'wallet', deposit: await depositRow(inv.id) });
-    if (status === 'credited') hub.pushBalance(inv.user_id);
+    if (status === 'credited') hub.pushBalance(userId);
     return status;
   }
 
-  function record(id, tx, inv, status, note = null, cents = null) {
+  function record(id, tx, userId, depId, status, note = null, cents = null) {
     const t = now();
     return db.payments.update({ _id: id }, {
-      $set: {
-        status, note, coin: tx?.coin ?? null, address: tx?.address ?? null, sum: tx?.sum ?? null, chain_status: tx?.status ?? null,
-        invoice_id: inv?.id ?? null, user_id: inv?.user_id ?? null, cents, updated_at: t,
-      },
+      $set: { status, note, txid: tx.txid, coin: tx.coin, address: tx.address, sum: tx.sum, user_id: userId, deposit_id: depId, cents, updated_at: t },
       $setOnInsert: { first_seen: t },
-    }, { upsert: true }).then(() => status);
+    }, { upsert: true });
   }
 
-  // Covers callbacks that never arrived (the server was asleep, Bcon gave
-  // up) and payments that were still confirming.
+  // Looks for new payments: every bitcoin address shown in the last three
+  // days or with a payment confirming, and the Tron wallet while any USDT
+  // request is open.
   let sweeping = null;
   function sweep() {
     sweeping ??= (async () => {
       if (ctx.closed) return;
-      if (bcon.storeAge > 10 * 60_000) await bcon.refreshStore().catch((e) => console.error('bcon store', e.message));
-      for (const c of coins()) {
-        if (!BCON_COINS[c.code].stable) await bcon.rate(BCON_COINS[c.code].ticker).catch(() => {});
-      }
-
-      for (const p of await db.payments.find({ status: 'pending', first_seen: { $gt: now() - 7 * DAY } }, { sort: { first_seen: 1 }, limit: 50 })) {
-        if (ctx.closed) return;
-        await settle(p.id).catch((e) => console.error('bcon settle', p.id, e.message));
-      }
-
-      await db.deposits.updateMany({ kind: 'bcon', status: 'awaiting', expires_at: { $lt: now() } }, { $set: { status: 'expired' } });
-      const open = await db.deposits.find(
-        { kind: 'bcon', status: { $in: ['awaiting', 'confirming', 'expired'] }, created_at: { $gt: now() - 2 * DAY } },
-        { projection: { coin: 1, address: 1, created_at: 1 }, sort: { _id: -1 }, limit: 200 },
-      );
-      // One history call per address; the shared wallets are asked once.
-      const byAddress = new Map();
-      for (const d of open) {
-        const k = `${BCON_COINS[d.coin].chain}|${d.address}`;
-        const cur = byAddress.get(k);
-        byAddress.set(k, { chain: BCON_COINS[d.coin].chain, address: d.address, since: Math.min(cur?.since ?? Infinity, d.created_at) });
-      }
-      for (const a of byAddress.values()) {
-        if (ctx.closed) return;
-        let txs;
-        try { txs = await bcon.history(a.address, a.chain); } catch (e) { console.error('bcon history', e.message); continue; }
-        for (const t of txs) {
-          if (!t.coin || (t.at && t.at < a.since - 10 * 60_000)) continue;
-          const known = await db.payments.findOne({ _id: t.txid }, { projection: { status: 1 } });
-          if (known && known.status !== 'pending') continue;
-          await settle(t.txid).catch((e) => console.error('bcon settle', t.txid, e.message));
+      try {
+        await db.deposits.updateMany({ kind: 'invoice', status: 'awaiting', expires_at: { $lt: now() } }, { $set: { status: 'expired' } });
+        if (btc) {
+          await price.get().catch(() => {});
+          const confirming = await db.deposits.find({ kind: 'chain', status: 'confirming' }, { projection: { address: 1 } });
+          const rows = await db.deposit_addresses.find(
+            { coin: btcKey, $or: [{ last_shown_at: { $gt: now() - 3 * DAY } }, { address: { $in: confirming.map((d) => d.address) } }] },
+            { sort: { last_shown_at: -1 }, limit: 200 },
+          );
+          if (rows.length) {
+            const tip = await btcApi.tip();
+            for (const row of rows) {
+              if (ctx.closed) return;
+              await scanBtc(row, tip);
+            }
+          }
         }
+        if (tron) await scanTron();
+        watch.lastScan = now();
+        watch.lastError = null;
+      } catch (e) {
+        watch.lastError = `${new Date().toISOString()} ${e.message}`;
+        throw e;
       }
     })().finally(() => { sweeping = null; });
     return sweeping;
   }
 
-  let sweepTimer = null;
-  async function startLive() {
-    try {
-      const s = await bcon.refreshStore();
-      const chains = Object.keys(s.chains);
-      console.log(`  bcon store ${s.name ?? '(forced chains)'}: ${chains.length ? chains.join(', ') : 'no wallets added yet'}`);
-    } catch (e) {
-      console.error(`  bcon: ${e.message}. Deposits stay off until this is fixed; retrying every few minutes.`);
+  // A player waiting on the deposit screen asks for a look now rather than
+  // at the next sweep.
+  const lastLook = new Map();
+  async function refresh(userId) {
+    if (!live) return;
+    const t = now();
+    if (t - (lastLook.get(userId) || 0) < 10_000) return;
+    lastLook.set(userId, t);
+    if (lastLook.size > 5000) lastLook.clear();
+    if (btc) {
+      const row = await db.deposit_addresses.findOne({ user_id: userId, coin: btcKey });
+      if (row) await scanBtc(row, await btcApi.tip());
     }
-    sweepTimer = setInterval(() => ctx.track(sweep().catch((e) => console.error('bcon sweep', e.message))), config.bconPollMs);
-    sweepTimer.unref?.();
-    ctx.track(sweep().catch((e) => console.error('bcon sweep', e.message)));
+    if (tron && (await db.deposits.count({ user_id: userId, kind: 'invoice', status: { $in: ['awaiting', 'expired'] }, created_at: { $gt: t - 3 * DAY } }))) {
+      await scanTron();
+    }
   }
 
+  let sweepTimer = null;
   async function resumePending() {
     if (live) {
-      // Withdrawals wait for staff in live mode; only deposits need a sweep.
-      await startLive();
+      const parts = [btc && `bitcoin ${btc.net === 'main' ? 'mainnet' : 'testnet'} (${btc.type}, first address ${btc.address(config.btcStartIndex)})`, tron && `USDT on Tron to ${config.tronAddress}`].filter(Boolean);
+      console.log(`  crypto payments: ${parts.join('; ')}`);
+      sweepTimer = setInterval(() => ctx.track(sweep().catch((e) => console.error('crypto sweep', e.message))), config.cryptoPollMs);
+      sweepTimer.unref?.();
+      ctx.track(sweep().catch((e) => console.error('crypto sweep', e.message)));
       return;
     }
     for (const d of await db.deposits.find({ status: 'pending' }, { projection: { _id: 1 } })) scheduleConfirm(d.id);
@@ -378,8 +422,8 @@ export function createWallet(ctx) {
     checkCoin(coin);
     if (user.status !== 'active') throw new MoneyError('suspended', 'Account suspended');
     address = String(address || '').trim();
-    const def = coinDef(coin);
-    if (!def.re.test(address)) throw new MoneyError('bad_address', `That is not a valid ${def.name} address on ${def.network}`);
+    const c = live ? coinInfo(coin) : COINS[coin];
+    if (!validAddress(coin, address)) throw new MoneyError('bad_address', `That is not a valid ${c.name} address on ${c.network}`);
     if (!Number.isInteger(amount) || amount < config.minWithdraw) throw new MoneyError('bad_amount', 'Minimum withdrawal is $5.00');
     const fee = withdrawFeeOf(amount);
     const net = amount - fee;
@@ -393,7 +437,7 @@ export function createWallet(ctx) {
         _id: id, user_id: user.id, coin, address, amount, fee, net, coin_amount: coinAmt,
         status: review ? 'review' : 'processing', txid: null, note: null, created_at: now(), completed_at: null,
       });
-      const what = coinAmt ? `${coinAmt} ${label(coin)}` : `${label(coin)}`;
+      const what = coinAmt ? `${coinAmt} ${label(coin)}` : label(coin);
       await money.userEntry(user.id, -amount, 'withdrawal', `withdrawal:${id}`, `${what} to ${address.slice(0, 10)}...`);
       return review;
     });
@@ -463,30 +507,30 @@ export function createWallet(ctx) {
     }
   }
 
-  // --------------------------------------------------------------- staff
+  // ---------------------------------------------------------------- staff
 
-  // A payment that arrived but was never matched (wrong amount, wrong
-  // network) is credited by hand against its txid, once.
+  // A payment that arrived but was never matched (wrong amount, below the
+  // minimum, a suspended account later reinstated) is credited by hand
+  // against its txid, once.
   async function manualCredit(userId, amount, sentTxid, coin, note) {
     sentTxid = String(sentTxid || '').trim();
     if (!/^[A-Za-z0-9]{8,128}$/.test(sentTxid)) throw new MoneyError('bad_txid', 'Enter the transaction id');
     if (!Number.isInteger(amount) || amount < 1) throw new MoneyError('bad_amount', 'Enter an amount');
     const id = await db.nextId('deposits');
     await db.tx(async () => {
-      const p = await db.payments.findOne({ _id: sentTxid }, { projection: { status: 1 } });
-      if (p && (p.status === 'credited' || p.status === 'manual')) throw new MoneyError('duplicate', 'That transaction was already credited');
+      if (await db.payments.findOne({ txid: sentTxid, status: { $in: ['credited', 'manual'] } }, { projection: { _id: 1 } })) {
+        throw new MoneyError('duplicate', 'That transaction was already credited');
+      }
       const u = await db.users.findOne({ _id: userId }, { projection: { status: 1 } });
       if (!u) throw new MoneyError('no_user', 'Account not found');
       if (u.status !== 'active') throw new MoneyError('suspended', 'Reinstate the account first');
       const t = now();
       await db.deposits.insert({
         _id: id, kind: 'manual', user_id: userId, coin: coin || null, address: null, amount, coin_amount: null, credited: amount,
-        status: 'credited', txid: sentTxid, txids: [sentTxid], confirmations: 2, required: 2, created_at: t, credited_at: t,
+        status: 'credited', txid: sentTxid, txids: [sentTxid], confirmations: 0, required: 0, created_at: t, credited_at: t,
       });
-      await db.payments.update({ _id: sentTxid }, {
-        $set: { status: 'manual', invoice_id: id, user_id: userId, cents: amount, note: note || null, updated_at: t },
-        $setOnInsert: { first_seen: t, coin: coin || null },
-      }, { upsert: true });
+      await db.payments.updateMany({ txid: sentTxid, status: { $in: ['unmatched', 'held', 'pending'] } }, { $set: { status: 'resolved', updated_at: t } });
+      await db.payments.insert({ _id: `manual:${sentTxid}`, status: 'manual', txid: sentTxid, coin: coin || null, user_id: userId, deposit_id: id, cents: amount, note: note || null, first_seen: t, updated_at: t });
       await money.userEntry(userId, amount, 'deposit', `deposit:${id}`, note || `Credited by staff, tx ${sentTxid.slice(0, 12)}`);
     });
     hub.toUser(userId, { t: 'wallet', deposit: await depositRow(id) });
@@ -507,30 +551,43 @@ export function createWallet(ctx) {
     };
     const [withdrawals, deposits, problems] = await Promise.all([
       db.withdrawals.find({ status: { $in: ['processing', 'review'] } }, { sort: { _id: 1 }, limit: 200 }).then(names),
-      db.deposits.find({ kind: { $in: ['bcon', 'manual'] } }, { projection: { ...DEPOSIT_FIELDS, user_id: 1 }, sort: { _id: -1 }, limit: 50 }).then(names),
-      db.payments.find({ status: { $in: ['unmatched', 'held', 'pending'] } }, { sort: { updated_at: -1 }, limit: 50 }).then(names),
+      db.deposits.find({ kind: { $in: ['chain', 'invoice', 'manual'] } }, { projection: { ...DEPOSIT_FIELDS, user_id: 1 }, sort: { _id: -1 }, limit: 50 }).then(names),
+      db.payments.find({ status: { $in: ['unmatched', 'held'] } }, { sort: { updated_at: -1 }, limit: 50 }).then(names),
     ]);
     for (const w of withdrawals) {
       w.label = label(w.coin);
-      w.network = coinDef(w.coin)?.network ?? null;
+      w.network = coinInfo(w.coin)?.network ?? null;
       w.coin_now = live ? coinAmount(w.net, w.coin) : null;
     }
     for (const d of deposits) d.label = label(d.coin);
-    const s = live ? bcon.store : null;
-    return {
-      mode: config.payments,
-      withdrawals, deposits, problems,
-      store: live ? {
-        connected: !!s, name: s?.name ?? null,
-        chains: Object.entries(s?.chains || {}).map(([chain, c]) => ({ chain, wallet: c.address || (c.xpub ? `${c.xpub.slice(0, 12)}...` : null), callbackOk: !!c.callback?.includes(config.bconSecret) })),
-        callbackPath: `/api/wallet/bcon/callback/${config.bconSecret}`,
-      } : null,
-    };
+
+    let wallets = null;
+    if (live) {
+      wallets = { lastScan: watch.lastScan, lastError: watch.lastError, price: price.cached, btc: null, tron: tron ? { address: config.tronAddress } : null };
+      if (btc) {
+        const assigned = await db.deposit_addresses.find({ coin: btcKey }, { projection: { index: 1, address: 1 } });
+        const used = new Set((await db.deposits.find({ kind: 'chain', address: { $in: assigned.map((a) => a.address) } }, { projection: { address: 1 } })).map((d) => d.address));
+        const top = assigned.reduce((m, a) => Math.max(m, a.index), config.btcStartIndex - 1);
+        const topUsed = assigned.filter((a) => used.has(a.address)).reduce((m, a) => Math.max(m, a.index), config.btcStartIndex - 1);
+        wallets.btc = {
+          network: btc.net, type: btc.type, xpub: `${config.btcXpub.slice(0, 8)}...${config.btcXpub.slice(-6)}`,
+          firstAddress: btc.address(config.btcStartIndex), firstIndex: config.btcStartIndex, assigned: assigned.length, highestIndex: top,
+          // Wallet apps stop looking 20 unused addresses past the last used
+          // one, so coins further out don't show until the limit is raised.
+          gap: top - topUsed,
+        };
+      }
+    }
+    return { mode: config.payments, withdrawals, deposits, problems, wallets };
   }
 
-  const DEPOSIT_FIELDS = { kind: 1, coin: 1, address: 1, amount: 1, credited: 1, coin_amount: 1, confirmations: 1, required: 1, status: 1, txid: 1, created_at: 1, expires_at: 1, credited_at: 1 };
+  const DEPOSIT_FIELDS = { kind: 1, coin: 1, address: 1, amount: 1, credited: 1, coin_amount: 1, confirmations: 1, required: 1, status: 1, txid: 1, note: 1, created_at: 1, expires_at: 1, credited_at: 1 };
   const WITHDRAWAL_FIELDS = { coin: 1, address: 1, amount: 1, fee: 1, net: 1, coin_amount: 1, status: 1, txid: 1, note: 1, created_at: 1, completed_at: 1 };
-  const depositRow = (id) => db.deposits.findOne({ _id: id }, { projection: DEPOSIT_FIELDS });
+  const depositRow = async (id) => {
+    const d = await db.deposits.findOne({ _id: id }, { projection: DEPOSIT_FIELDS });
+    if (d) d.label = label(d.coin);
+    return d;
+  };
   const withdrawalRow = (id) => db.withdrawals.findOne({ _id: id }, { projection: WITHDRAWAL_FIELDS });
 
   async function overview(userId) {
@@ -545,9 +602,11 @@ export function createWallet(ctx) {
   }
 
   return {
-    live, bcon, coins, address, overview, resumePending, releaseHeld, forfeitHeld,
-    deposit: (user, coin, amount) => (live ? openDeposit(user, coin, amount) : testDeposit(user, coin, amount)),
-    invoice, notify, settle, sweep, withdraw, completeWithdraw, rejectWithdraw, manualCredit, staffView,
+    live, coins, address, overview, resumePending, releaseHeld, forfeitHeld, refresh, sweep,
+    deposit: (user, coin, amount) => (live ? openInvoice(user, coin, amount) : testDeposit(user, coin, amount)),
+    invoice, withdraw, completeWithdraw, rejectWithdraw, manualCredit, staffView,
     stop: () => clearInterval(sweepTimer),
   };
 }
+
+const fmtUsd = (cents) => `$${(cents / 100).toFixed(2)}`;

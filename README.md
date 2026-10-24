@@ -30,24 +30,25 @@ In Atlas, under Network Access, allow `0.0.0.0/0`. Render's free instances don't
 
 To make yourself an admin, either start with `ADMIN_USERS=yourname node server.js` or run `npm run make-admin -- yourname` once the account exists.
 
-## Real crypto payments (Bcon)
+## Real crypto payments
 
-With `PAYMENTS=paper` (the default) deposits and withdrawals are simulated. With `PAYMENTS=bcon`, deposits are real payments through [Bcon Global](https://bcon.global), a non-custodial gateway: coins go straight to your own wallets and Bcon charges 1% from a balance you top up in its dashboard.
+With `PAYMENTS=paper` (the default) deposits and withdrawals are simulated. With `PAYMENTS=crypto` the site takes real bitcoin and USDT on Tron, straight into your own wallets. There is no payment company in between: the server watches the blockchains through free public explorers (mempool.space and blockstream.info for bitcoin, TronGrid for Tron) and never holds a key that can spend anything.
 
 Setup:
 
-1. In the Bcon dashboard, create a store and add a wallet for each chain you want: a Bitcoin xpub/zpub (Electrum: Wallet > Information > Master Public Key), a Tron address for USDT/USDC, and so on. Only public keys and addresses go to Bcon.
-2. Copy the key from the store settings into `BCON_API_KEY`. Generate `BCON_CALLBACK_SECRET` with `node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"`.
-3. Set `PAYMENTS=bcon` and deploy. In Admin > Payments, copy the callback URL and paste it into the store settings for every chain. Admin shows a red "Callback URL missing" next to any chain that doesn't have it.
+1. **Bitcoin.** Make a new Electrum wallet just for the site (Standard wallet, new seed; keep the seed offline). In Electrum, Wallet > Information > Master Public Key gives a `zpub...`. Put it in `BTC_XPUB`. In Admin > Payments, check that "First address" matches the first address in Electrum's Addresses tab.
+2. **USDT.** Put a Tron address you control (TronLink, Trust Wallet...) in `TRON_ADDRESS`. Keep a little TRX in that wallet to pay network fees when you move USDT out.
+3. **A new database.** Real money can't run on a database that has held paper money (the server refuses), so set `MONGODB_DB` to a new name such as `chessbets_real`. Players register again there.
+4. Set `PAYMENTS=crypto` and deploy.
 
 How it works:
 
-- A player picks a coin and a dollar amount. Bcon prices it and returns an address and an exact coin amount. Bitcoin gets a new address per deposit. Every other chain pays into your one wallet, and the exact amount (with a cent added for repeats) is what identifies the deposit.
-- Bcon's callback is only protected by the secret in its URL, so it is treated as a hint: each transaction is looked up again through Bcon's API with your key, checked against the deposit's address, coin and amount, and credited once per txid after 2 confirmations.
-- Every few minutes (`BCON_POLL_MS`) the server also asks Bcon about open deposits, which covers callbacks lost while the server was asleep.
-- Short payments are credited pro rata. A payment that arrives after its quote expired is valued at the quoted or the current price, whichever is lower.
-- Money reaching a suspended account is held, not credited or forfeited. Payments that match no deposit (for example an exchange took its fee out of the amount) show under "Payments that need a person"; credit them from the player's admin page with the txid.
-- Bcon has no payout API. Withdrawals wait in Admin > Payments: send the coins from your wallet, paste the txid, and press Mark sent (the 5% fee goes to the house then). Decline returns the full amount to the player.
+- **Bitcoin:** each player gets their own address, derived from the xpub, and keeps it. Any amount can be sent; it is credited in dollars at the current price once it has `BTC_CONFIRMATIONS` (2) confirmations. Payments under `BTC_MIN_CREDIT` ($1) are held for staff.
+- **USDT (TRC-20):** everyone pays into the one Tron address, so each deposit request gets an exact amount ($25 becomes 25.00, the next open $25 request 25.01) and a payment is matched by that amount. Only the real USDT contract counts; look-alike tokens are ignored.
+- Every minute (`CRYPTO_POLL_MS`) the server checks addresses shown in the last three days, and a player waiting on the deposit screen triggers a check every 20 seconds. Render's free tier sleeps when idle, so a payment that confirms while nobody is on the site is credited when it wakes.
+- Each payment is credited once (keyed by transaction id). Money reaching a suspended account is held, not credited or forfeited. Payments that match nothing show in Admin > Payments under "Payments that need a person"; credit them from the player's admin page with the txid.
+- Withdrawals wait in Admin > Payments: send the coins from Electrum or your Tron wallet, paste the txid, and press Mark sent (the 5% fee goes to the house then). Decline returns the full amount to the player.
+- Wallet apps only look 20 unused addresses ahead. If many players open the deposit screen without paying, Admin warns you and gives the Electrum console line that makes it look further.
 
 Real-money wagering is regulated almost everywhere. Get legal advice before you switch this on.
 
@@ -67,7 +68,7 @@ Real-money wagering is regulated almost everywhere. Get legal advice before you 
 | $1 / $5 / $10 win | $1.92 / $9.60 / $19.20 |
 | Draw returns | $0.96 / $4.80 / $9.60 per player |
 | Withdrawal fee | 5%, minimum withdrawal $5 |
-| Currencies | Paper: BTC, ETH, USDT, USDC, SOL, LTC, DOGE at reference rates. Bcon: whichever chains the store has wallets for (BTC, USDT/USDC on Tron, Ethereum, BNB Chain and Solana, ETH, TRX, BNB, SOL) |
+| Currencies | Paper: BTC, ETH, USDT, USDC, SOL, LTC, DOGE at reference rates. Real: BTC, and USDT on Tron |
 
 Deposit addresses look like `demo-btc-...` on purpose, so nobody can send real coins to one. A "test deposit" walks through confirmations and then credits the balance.
 
@@ -130,8 +131,8 @@ src/bots.js          bot personas and opening books
 src/engine.js        UCI driver and engine pools
 src/anticheat.js     fair-play model and analysis service
 src/enforcement.js   review, suspension, refunds, scheduled actions
-src/wallet.js        deposits and withdrawals, paper or through Bcon
-src/bcon.js          Bcon Global API client
+src/wallet.js        deposits and withdrawals, paper or real
+src/chain.js         bitcoin addresses from an xpub, block explorer and TronGrid clients
 src/money.js         ledger helpers and payout math
 src/db.js            MongoDB connection, indexes, transactions
 public/              single-page client, no build step
@@ -161,13 +162,13 @@ The server tests check after every scenario that each user's ledger sums to thei
 | `BOT_WIN_SUSPEND_MIN_MS` / `MAX_MS` | 2h / 5h | |
 | `BLOCK_SAME_IP` | off | `1` refuses to pair two accounts on one IP |
 | `REGISTER_PER_HOUR` / `LOGIN_PER_MINUTE` | 5 / 12 | per IP |
-| `PAYMENTS` | paper | `bcon` for real crypto payments |
-| `BCON_API_KEY` | | key from the Bcon store settings |
-| `BCON_CALLBACK_SECRET` | | 24+ random characters, part of the callback URL |
-| `BCON_COINS` | all the store supports | limit what's offered, e.g. `BTC,USDT-TRC20` |
-| `BCON_STORE_ID` | first store | if the account has several |
-| `BCON_MIN_DEPOSIT` / `BCON_MAX_DEPOSIT` | 1000 / 500000 | cents |
-| `BCON_POLL_MS` | 180000 | how often open deposits are re-checked |
+| `PAYMENTS` | paper | `crypto` for real payments |
+| `BTC_XPUB` | | zpub/xpub/ypub of the site's bitcoin wallet (vpub/tpub for testnet) |
+| `TRON_ADDRESS` | | Tron address that receives USDT |
+| `BTC_CONFIRMATIONS` / `BTC_MIN_CREDIT` | 2 / 100 | cents |
+| `MIN_DEPOSIT` / `MAX_DEPOSIT` | 1000 / 500000 | cents, for USDT requests |
+| `CRYPTO_POLL_MS` | 60000 | how often the chains are checked |
+| `BTC_API` / `BTC_PRICE_URLS` / `TRON_API` / `TRONGRID_API_KEY` | mempool.space, blockstream.info, Coinbase / TronGrid | comma-separated fallbacks |
 
 Live games and the queues live in the server's memory, so run one instance. On restart, unfinished games are voided and every open stake is returned.
 

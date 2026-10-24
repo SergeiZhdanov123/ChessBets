@@ -107,7 +107,7 @@ function renderSidebar() {
         ${navLink('/support', 'help', 'Support')}
         ${u?.isAdmin ? navLink('/admin', 'admin', 'Admin') : ''}
       </div>
-      ${store.config?.payments === 'bcon' ? '' : '<p class="side-note">Paper money. Balances have no cash value.</p>'}
+      ${store.config?.payments === 'crypto' ? '' : '<p class="side-note">Paper money. Balances have no cash value.</p>'}
     </div>`;
   el.querySelector('#sideToggle').onclick = () => {
     if (window.innerWidth <= 1000) { shell.classList.toggle('side-open'); return; }
@@ -201,7 +201,7 @@ function renderFooter() {
     <div class="footer-in">
       <div>
         <a class="logo" href="/" style="margin-bottom:10px;display:inline-flex">${knightMark}<span>ChessBets</span></a>
-        <p>${store.config?.payments === 'bcon'
+        <p>${store.config?.payments === 'crypto'
           ? 'Wagered chess against real opponents and house bots. Deposits and withdrawals in crypto. 18+ only.'
           : 'Wagered chess against real opponents and house bots. This edition runs on paper money: deposits and withdrawals are simulated and balances have no cash value. 18+ only.'}</p>
       </div>

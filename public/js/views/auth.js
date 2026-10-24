@@ -50,7 +50,7 @@ export function openAuth(mode = 'login', { then } = {}) {
       closeModal();
       onSignedIn();
       toast(mode === 'login' ? `Welcome back, ${r.user.username}` : `Welcome, ${r.user.username}`, {
-        kind: 'ok', body: mode === 'register' ? (store.config?.payments === 'bcon' ? 'Open the wallet to make a deposit.' : 'Open the wallet to add paper funds.') : '',
+        kind: 'ok', body: mode === 'register' ? (store.config?.payments === 'crypto' ? 'Open the wallet to make a deposit.' : 'Open the wallet to add paper funds.') : '',
       });
       then?.();
     } catch (err) {

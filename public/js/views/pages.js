@@ -50,12 +50,13 @@ function terms() {
     <h1>Terms</h1>
     <p class="lede">The short version of how money, games and accounts work here.</p>
 
-    ${cfg.payments === 'bcon' ? `
+    ${cfg.payments === 'crypto' ? `
     <h2>Deposits and withdrawals</h2>
     <ul>
-      <li>Deposits and withdrawals are in cryptocurrency only. Deposits are processed by Bcon Global and go straight to wallets we control.</li>
-      <li>Each deposit is priced in dollars when you request the address. Send the exact amount shown, on the network shown. A deposit is credited after 2 network confirmations.</li>
-      <li>Coins sent on the wrong network, or in a token we don't list for that address, may be lost. If an amount arrives that doesn't match, contact support with the transaction id.</li>
+      <li>Deposits and withdrawals are in cryptocurrency only: bitcoin, and USDT on the Tron network. Deposits go straight to wallets we control.</li>
+      <li>Bitcoin deposits go to your own deposit address and are credited in dollars at the bitcoin price when they reach the required confirmations.</li>
+      <li>USDT deposits are requested for a dollar amount. Send the exact amount shown, on the Tron network; the amount is how the payment is matched to your account.</li>
+      <li>Coins sent on the wrong network, or in a token we don't accept at that address, may be lost. If a payment arrives that doesn't match, contact support with the transaction id.</li>
       <li>Withdrawals are checked and sent by staff to the address you enter. Every withdrawal carries a ${cfg.withdrawFeeBps / 100}% fee. Check the address and network carefully: a payment sent to a wrong address can't be reversed.</li>
     </ul>` : `
     <h2>Paper money</h2>
