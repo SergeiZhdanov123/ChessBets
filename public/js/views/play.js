@@ -38,6 +38,7 @@ export default function play(el, _params, query) {
   el.querySelector('#snd').onclick = (e) => { sound.toggle(); e.currentTarget.innerHTML = icon(sound.muted ? 'mute' : 'sound'); };
 
   let timer = null;
+  let note = '';
 
   function paint() {
     const u = store.user;
@@ -101,6 +102,7 @@ export default function play(el, _params, query) {
         <h3>Finding an opponent</h3>
         <div class="muted">${inQ.tc} min · ${money(inQ.stake)} wager</div>
         <div class="t"><span id="el">0:00</span> · ${others ? `${others} other${others > 1 ? 's' : ''} waiting` : 'You are first in line'}</div>
+        ${note ? `<p class="fine" style="margin-top:10px;max-width:240px">${esc(note)}</p>` : ''}
       </div>`;
     const elT = over.querySelector('#el');
     const upd = () => {
@@ -131,7 +133,8 @@ export default function play(el, _params, query) {
 
   const offs = [
     bus.on('store', (p) => { if ('queue' in p || 'user' in p || 'counts' in p || 'activeGame' in p) paint(); }),
-    bus.on('queue', (m) => { if (m.state === 'left' && m.why === 'disconnected') paint(); }),
+    bus.on('queue', (m) => { note = ''; if (m.state === 'left' && m.why === 'disconnected') paint(); }),
+    bus.on('queue-note', (m) => { note = m.note; paintOverlay(); }),
     bus.on('error', (m) => { if (m.code) paint(); }),
   ];
   paint();

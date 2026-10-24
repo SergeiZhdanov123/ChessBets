@@ -234,7 +234,7 @@ export class LiveGame {
 
   // { result, reason } for a finished game, { status: 'aborted' } for no game.
   end({ result = null, reason, status = 'finished', fairplay = null }) {
-    if (this.status !== 'active') return;
+    if (this.status !== 'active' || this.mgr.closed) return;
     this.status = status;
     this.result = result;
     this.reason = reason;
@@ -256,6 +256,7 @@ export function createGames(ctx) {
   const mgr = {
     hub,
     live,
+    get closed() { return !!ctx.closed; },
     get fairplay() { return ctx.fairplay; },
 
     activeFor: (userId) => {

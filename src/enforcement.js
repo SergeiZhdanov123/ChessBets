@@ -160,6 +160,14 @@ export function createEnforcement(ctx) {
         review(loser, `Lost ${n} very short games against the same account`, g.id);
       }
     }
+    const sharedDevice = db.get(
+      'SELECT 1 FROM user_devices x JOIN user_devices y ON x.device_id = y.device_id WHERE x.user_id = ? AND y.user_id = ? LIMIT 1',
+      g.white.userId, g.black.userId,
+    );
+    if (sharedDevice) {
+      event(g.white.userId, g.id, 'shared_device', `Played account ${g.black.userId}, which has used the same browser`);
+      event(g.black.userId, g.id, 'shared_device', `Played account ${g.white.userId}, which has used the same browser`);
+    }
     if (g.white.ip && g.white.ip === g.black.ip) {
       event(g.white.userId, g.id, 'shared_ip', `Played account ${g.black.userId} from the same IP`);
       event(g.black.userId, g.id, 'shared_ip', `Played account ${g.white.userId} from the same IP`);

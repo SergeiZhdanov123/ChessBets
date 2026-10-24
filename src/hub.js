@@ -140,6 +140,7 @@ export function createHub(ctx) {
 
       ws.on('close', () => {
         conns.delete(conn);
+        if (ctx.closed) return; // shutting down: no presence or queue timers
         for (const id of conn.games) subs.get(id)?.delete(conn);
         if (!conn.userId) return;
         byUser.get(conn.userId)?.delete(conn);

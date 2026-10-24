@@ -21,9 +21,10 @@ export const config = {
   timeControls: [3, 10],
   stakes: [100, 500, 1000],
   matchTickMs: num(env.MATCH_TICK_MS, 1000),
-  // Two accounts on the same IP never get paired in production. On localhost
-  // everything shares 127.0.0.1, so this is relaxed for development.
-  blockSameIpMatch: env.BLOCK_SAME_IP === '1' || (env.BLOCK_SAME_IP !== '0' && env.NODE_ENV === 'production'),
+  // Off by default: households and phone carriers share IPs, and blocking
+  // them strands real players in the queue. Same-IP games are still logged
+  // for fair-play review. Set BLOCK_SAME_IP=1 to refuse those pairings.
+  blockSameIpMatch: env.BLOCK_SAME_IP === '1',
 
   // Bot games.
   botMinutes: 30,

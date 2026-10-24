@@ -95,8 +95,12 @@ test('fair play: engine play with even timing and tab switching across games sus
 
 test('fair play: timing and focus never count without unusual moves', () => {
   const r = scorePlayer(rows({ n: 30, nearRate: 0.7, crit: 5, critFound: 2, times: [4000, 4100], blur: 30 }), 'w');
-  assert.equal(r.corroboration, 0);
+  assert.ok(r.corroboration > 0);           // measured...
+  assert.equal(r.evidence, r.precision);    // ...but not counted
   assert.equal(r.verdict, 'clean');
+  const acct = accountEvidence([r, r, r, r, r]);
+  assert.equal(acct.evidence, acct.precision);
+  assert.equal(decide(r, acct), 'none');
 });
 
 test('fair play: too few positions is insufficient', () => {

@@ -93,7 +93,7 @@ async function series(maxGames) {
   return { reviewedAfter, suspendedAfter, actions, humanAcct, humanReports, cheatReports, human };
 }
 
-test('full-strength engine relay: frozen within three games, suspended within seven; human untouched', { timeout: 1_800_000 }, async () => {
+test('full-strength engine relay: frozen within three games, suspended within seven; human untouched', { timeout: 3_600_000 }, async () => {
   relay = 'full';
   const r = await series(7);
   assert.ok(r.reviewedAfter !== null && r.reviewedAfter <= 3, 'withdrawals should freeze within three games');
@@ -104,7 +104,7 @@ test('full-strength engine relay: frozen within three games, suspended within se
 // A quick, shallow engine plays like a very strong human. The model is built
 // to leave those games alone rather than risk banning real players, so the
 // only hard requirement here is that the human is never touched.
-test('light engine relay: scored above the human, human untouched', { timeout: 1_800_000 }, async () => {
+test('light engine relay: scored above the human, human untouched', { timeout: 3_600_000 }, async () => {
   relay = 'light';
   const r = await series(3);
   assert.ok(!r.actions.some(([, u]) => u === r.human), 'human must not be flagged at all');

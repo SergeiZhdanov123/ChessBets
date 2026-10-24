@@ -22,7 +22,7 @@ function fairPlay() {
     <ul>
       <li><b>No spectators.</b> Live games are visible only to the two players, so nobody can feed you moves from the sidelines.</li>
       <li><b>No analysis during play.</b> The site never shows evaluations, hints or engine lines.</li>
-      <li><b>No playing yourself.</b> Accounts on the same browser are never paired, and pairs that keep meeting are split up.</li>
+      <li><b>No playing yourself.</b> Two accounts in the same browser are never paired. Games between accounts that share a device or network are flagged for review, and the matchmaker prefers opponents you haven't just played.</li>
       <li><b>Server-side rules.</b> Moves, clocks and results are decided on the server. A modified page cannot change them.</li>
       <li><b>Live checks.</b> In longer games the analysis runs while you play. If an opponent is caught mid-game, the game stops and you are paid the full pot with no rake.</li>
     </ul>

@@ -33,8 +33,8 @@ async function match(a, b, tc = 3, stake = 100) {
   await b.wait((m) => m.t === 'matched');
   a.send({ t: 'sub', id: ma.id });
   b.send({ t: 'sub', id: ma.id });
-  const ga = await a.wait((m) => m.t === 'game');
-  await b.wait((m) => m.t === 'game');
+  const ga = await a.wait((m) => m.t === 'game' && m.game.id === ma.id);
+  await b.wait((m) => m.t === 'game' && m.game.id === ma.id);
   return ga.game.you === 'w' ? { white: a, black: b, id: ma.id } : { white: b, black: a, id: ma.id };
 }
 
@@ -45,7 +45,7 @@ async function play(g, sans) {
     const mover = c.turn() === 'w' ? g.white : g.black;
     const mv = c.move(san);
     mover.send({ t: 'move', id: g.id, u: mv.from + mv.to + (mv.promotion || ''), ply: c.history().length - 1 });
-    await g.white.wait((m) => m.t === 'move' && m.ply === c.history().length);
+    await g.white.wait((m) => m.t === 'move' && m.id === g.id && m.ply === c.history().length);
   }
 }
 
@@ -227,6 +227,7 @@ test('two accounts from the same browser are never paired', async () => {
   b.send({ t: 'queue-join', tc: 10, stake: 100 });
   await sleep(400);
   assert.equal(app.ctx.matchmaker.counts()['10:100'], 2);
+  assert.match((await a.wait((m) => m.t === 'queue-note')).note, /same browser/);
   assert.ok(db().get("SELECT 1 FROM fair_play_events WHERE kind = 'multi_account' AND user_id = ?", b.user.id));
   const c = await player();
   c.send({ t: 'queue-join', tc: 10, stake: 100 });
@@ -237,6 +238,70 @@ test('two accounts from the same browser are never paired', async () => {
   live.end({ status: 'aborted', reason: 'aborted' });
   await sleep(100);
   a.close(); b.close(); c.close();
+  checkBooks(db());
+});
+
+test('several people waiting are all paired, including shared networks and past shared browsers', async () => {
+  // Four players in one queue: everyone must get a game.
+  const ps = [];
+  for (let i = 0; i < 4; i++) ps.push(await player(2000));
+  // Two of them once signed in on the same browser, then moved to their own.
+  db().run('INSERT INTO user_devices (user_id, device_id, ip, first_seen, last_seen) VALUES (?,?,?,?,?)', ps[0].user.id, 'f'.repeat(32), '127.0.0.1', Date.now(), Date.now());
+  db().run('INSERT INTO user_devices (user_id, device_id, ip, first_seen, last_seen) VALUES (?,?,?,?,?)', ps[1].user.id, 'f'.repeat(32), '127.0.0.1', Date.now(), Date.now());
+  for (const p of ps) p.send({ t: 'queue-join', tc: 3, stake: 500 });
+  const ids = await Promise.all(ps.map((p) => p.wait((m) => m.t === 'matched', 4000).then((m) => m.id)));
+  assert.equal(new Set(ids).size, 2, 'four players should make two games');
+  assert.equal(app.ctx.matchmaker.counts()['3:500'], 0);
+  for (const id of new Set(ids)) app.ctx.games.get(id).end({ status: 'aborted', reason: 'aborted' });
+  // Just the two who once shared a browser (now on their own): still paired.
+  ps[0].send({ t: 'queue-join', tc: 10, stake: 500 });
+  ps[1].send({ t: 'queue-join', tc: 10, stake: 500 });
+  const m = await ps[0].wait((x) => x.t === 'matched', 4000);
+  const live = app.ctx.games.get(m.id);
+  assert.deepEqual([live.white.userId, live.black.userId].sort(), [ps[0].user.id, ps[1].user.id].sort());
+  live.end({ status: 'aborted', reason: 'aborted' });
+  await sleep(50);
+  ps.forEach((p) => p.close());
+  checkBooks(db());
+});
+
+test('the same two players can keep playing each other', async () => {
+  const a = await player(), b = await player();
+  for (let i = 0; i < 4; i++) {
+    const g = await match(a, b, 3, 100);
+    await play(g, ['e4', 'e5']);
+    g.white.send({ t: 'resign', id: g.id });
+    await a.wait((m) => m.t === 'end' && m.id === g.id);
+    await b.wait((m) => m.t === 'end' && m.id === g.id);
+  }
+  assert.equal(db().get("SELECT COUNT(*) n FROM games WHERE status = 'finished' AND (white_id = ? OR black_id = ?)", a.user.id, a.user.id).n, 4);
+  a.close(); b.close();
+  checkBooks(db());
+});
+
+test('with a choice, the matchmaker avoids a repeat opponent', async () => {
+  const a = await player(), b = await player();
+  const g = await match(a, b, 10, 500);
+  await play(g, ['e4', 'e5']);
+  g.white.send({ t: 'resign', id: g.id });
+  await a.wait((m) => m.t === 'end'); await b.wait((m) => m.t === 'end');
+  const row = (p) => db().get('SELECT * FROM users WHERE id = ?', p.user.id);
+  for (let trial = 0; trial < 8; trial++) {
+    const c = await player(2000);
+    const before = new Set(app.ctx.games.live.keys());
+    // Join all three and pair synchronously, so the timer can't interleave.
+    for (const p of [a, b, c]) app.ctx.matchmaker.join(row(p), 10, 1000, {});
+    app.ctx.matchmaker.tick();
+    const fresh = [...app.ctx.games.live.values()].filter((x) => !before.has(x.id));
+    assert.equal(fresh.length, 1);
+    const seats = [fresh[0].white.userId, fresh[0].black.userId];
+    assert.ok(seats.includes(c.user.id), `trial ${trial}: paired the two players who just met`);
+    fresh[0].end({ status: 'aborted', reason: 'aborted' });
+    for (const p of [a, b]) app.ctx.matchmaker.leave(p.user.id);
+    db().run('DELETE FROM games WHERE id = ?', fresh[0].id); // keep c's history out of later trials
+    c.close();
+  }
+  a.close(); b.close();
   checkBooks(db());
 });
 

@@ -53,32 +53,26 @@ export function createMatchmaker(ctx) {
     return true;
   }
 
-  // Accounts that share a device, or (in production) an IP, never meet.
-  function sharesDevice(a, b) {
-    if (a.device && b.device && a.device === b.device) return true;
-    const row = db.get(
-      `SELECT 1 FROM user_devices x JOIN user_devices y ON x.device_id = y.device_id WHERE x.user_id = ? AND y.user_id = ? LIMIT 1`,
-      a.userId, b.userId,
-    );
-    return !!row;
+  // The only hard rule: one browser can't play itself. Shared IPs are normal
+  // (homes, campuses, phone carriers), and a laptop a friend once signed in
+  // on is not proof of anything, so those pairings are allowed and recorded
+  // for fair-play review instead (see enforcement.gameEnded).
+  function eligible(a, b) {
+    if (a.userId === b.userId) return false;
+    if (a.device && b.device && a.device === b.device) return false;
+    if (config.blockSameIpMatch && a.ip && a.ip === b.ip) return false;
+    return true;
   }
 
-  // The same two accounts meeting over and over in a random queue is the
-  // signature of queue sniping. Cap it.
+  // How often two accounts met in the last day. Used to prefer someone new
+  // when there is a choice, which makes queue sniping harder; it never stops
+  // a pairing outright.
   function recentMeetings(a, b) {
     return db.get(
       `SELECT COUNT(*) n FROM games WHERE kind = 'human' AND created_at > ? AND
        ((white_id = ? AND black_id = ?) OR (white_id = ? AND black_id = ?))`,
       Date.now() - 24 * 3600_000, a.userId, b.userId, b.userId, a.userId,
     ).n;
-  }
-
-  function eligible(a, b) {
-    if (a.userId === b.userId) return false;
-    if (sharesDevice(a, b)) return false;
-    if (config.blockSameIpMatch && a.ip && a.ip === b.ip) return false;
-    if (recentMeetings(a, b) >= 3) return false;
-    return true;
   }
 
   function shuffle(arr) {
@@ -89,32 +83,50 @@ export function createMatchmaker(ctx) {
     return arr;
   }
 
+  function pair(q, a, b) {
+    q.delete(a.userId); q.delete(b.userId);
+    where.delete(a.userId); where.delete(b.userId);
+    try {
+      const g = ctx.games.createHuman(a, b);
+      hub.toUser(a.userId, { t: 'matched', id: g.id });
+      hub.toUser(b.userId, { t: 'matched', id: g.id });
+    } catch (err) {
+      console.error('match failed', err);
+      money.release(a.holdId); money.release(b.holdId);
+      hub.toUser(a.userId, { t: 'queue', state: 'left', why: 'error' });
+      hub.toUser(b.userId, { t: 'queue', state: 'left', why: 'error' });
+      hub.pushBalance(a.userId); hub.pushBalance(b.userId);
+    }
+  }
+
   function tick() {
     for (const q of queues.values()) {
       if (q.size < 2) continue;
       const pool = shuffle([...q.values()]);
       const used = new Set();
-      for (let i = 0; i < pool.length; i++) {
-        const a = pool[i];
+      let paired = false;
+      for (const a of pool) {
         if (used.has(a.userId)) continue;
-        for (let j = i + 1; j < pool.length; j++) {
-          const b = pool[j];
-          if (used.has(b.userId) || !eligible(a, b)) continue;
-          used.add(a.userId); used.add(b.userId);
-          q.delete(a.userId); q.delete(b.userId);
-          where.delete(a.userId); where.delete(b.userId);
-          try {
-            const g = ctx.games.createHuman(a, b);
-            hub.toUser(a.userId, { t: 'matched', id: g.id });
-            hub.toUser(b.userId, { t: 'matched', id: g.id });
-          } catch (err) {
-            console.error('match failed', err);
-            money.release(a.holdId); money.release(b.holdId);
-          }
-          break;
-        }
+        // Everyone a can play, fewest recent meetings first, random among ties.
+        const options = pool
+          .filter((b) => b !== a && !used.has(b.userId) && eligible(a, b))
+          .map((b) => ({ b, met: recentMeetings(a, b) }))
+          .sort((x, y) => x.met - y.met);
+        if (!options.length) continue;
+        const b = options[0].b;
+        used.add(a.userId); used.add(b.userId);
+        pair(q, a, b);
+        paired = true;
       }
-      if (used.size) pushCounts();
+      if (paired) pushCounts();
+      // Tell anyone left waiting with company they can't be paired with.
+      for (const e of q.values()) {
+        const blocked = q.size > 1 && [...q.values()].every((o) => o === e || !eligible(e, o));
+        if (blocked && !e.noted) {
+          e.noted = true;
+          hub.toUser(e.userId, { t: 'queue-note', note: 'The other players waiting here are signed in on this same browser or network, so you will not be paired with them.' });
+        } else if (!blocked) e.noted = false;
+      }
     }
   }
 

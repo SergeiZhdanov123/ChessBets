@@ -13,7 +13,7 @@ To make yourself an admin, either start with `ADMIN_USERS=yourname node server.j
 
 ## What's in it
 
-**Play a Human.** Six queues: 3 or 10 minutes, $1, $5 or $10, no increment. No ratings. Every second the matchmaker shuffles each queue and pairs people at random. It skips pairs that share a browser (and, in production, an IP), and pairs that have already met three times in the last 24 hours.
+**Play a Human.** Six queues: 3 or 10 minutes, $1, $5 or $10, no increment. No ratings. Every second the matchmaker shuffles each queue and pairs people at random. It prefers opponents you haven't met recently. The only hard block is two accounts in the same browser. Games between accounts that share a device history or an IP are allowed but logged for fair-play review (set `BLOCK_SAME_IP=1` to refuse same-IP pairings).
 
 **Play a Bot.** Hikaru, Magnus and Kasparov. All three are full-strength Stockfish 19 (Skill 20, no strength limit, multiple threads, 0.7 to 4.2 s a move). What differs between them is the opening repertoire, the pace and the presentation. The site calls them bots "built to play in the style of" each player, with a line saying they are not affiliated with or endorsed by the players. 30 minutes a side. Wagers from $1 to $100. A win pays 2x, a draw returns the wager, and there is no rake.
 
@@ -63,7 +63,7 @@ All of this lives in `src/anticheat.js`. The rule it follows: strong play alone 
   - Live games can't be spectated.
   - No evaluations are ever shown.
   - Moves, clocks and results are server-side, and moves are checked against the expected ply.
-  - Browser-level device ids keep alt accounts apart.
+  - Browser-level device ids keep one browser from playing itself. Shared-device and shared-IP games are logged for review.
   - Repeated very short losses to the same account flag both accounts for collusion.
 
 Measured with real Stockfish games (`test/fairplay-engine.test.js`):
@@ -113,7 +113,7 @@ The server tests check after every scenario that each user's ledger sums to thei
 | `ANALYSIS_NODES` | 500000 | per position, fair-play analysis |
 | `ANALYSIS_ENGINES` / `BOT_ENGINES` / `BOT_THREADS` | 2 / 2 / auto | |
 | `BOT_WIN_SUSPEND_MIN_MS` / `MAX_MS` | 2h / 5h | |
-| `BLOCK_SAME_IP` | on in production | never pair two accounts on one IP |
+| `BLOCK_SAME_IP` | off | `1` refuses to pair two accounts on one IP |
 | `REGISTER_PER_HOUR` / `LOGIN_PER_MINUTE` | 5 / 12 | per IP |
 
 On restart, unfinished games are voided and every open stake is returned.
