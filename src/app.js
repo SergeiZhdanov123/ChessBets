@@ -11,7 +11,7 @@ import { createHub, CHAT_PRESETS } from './hub.js';
 import { createGames, feedShape } from './games.js';
 import { createMatchmaker } from './matchmaking.js';
 import { createEnforcement } from './enforcement.js';
-import { createWallet, coinList, COINS } from './wallet.js';
+import { createWallet } from './wallet.js';
 import { FairPlay, MODEL, accountEvidence } from './anticheat.js';
 import { botList, BOTS } from './bots.js';
 
@@ -61,7 +61,13 @@ function limiter(max, windowMs) {
 const escapeRegex = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export async function createApp(opts = {}) {
-  const ctx = { queueGrace: new Map() };
+  if (config.payments === 'bcon') {
+    if (!config.bconKey && !opts.bcon) throw new Error('PAYMENTS=bcon needs BCON_API_KEY (the key from your Bcon store settings).');
+    if (config.bconSecret.length < 24 || !/^[A-Za-z0-9_-]+$/.test(config.bconSecret)) {
+      throw new Error('PAYMENTS=bcon needs BCON_CALLBACK_SECRET: 24+ letters, digits, - or _. Generate one with: node -e "console.log(require(\'crypto\').randomBytes(24).toString(\'base64url\'))"');
+    }
+  }
+  const ctx = { queueGrace: new Map(), bcon: opts.bcon };
   const db = (ctx.db = await openDb({ uri: opts.mongoUri || config.mongoUri, name: opts.dbName || config.mongoDb }));
 
   // Background work (game writes, deposits, analysis) registers here so a
@@ -203,6 +209,25 @@ export async function createApp(opts = {}) {
 
   app.use('/api', express.json({ limit: '24kb' }));
 
+  // Bcon's payment callback. It can't send our CSRF header, so it sits in
+  // front of that check; the secret in the path keeps strangers out, and
+  // every payment is confirmed with Bcon's API before it counts.
+  const secretHash = sha(config.bconSecret || crypto.randomBytes(16).toString('hex'));
+  app.all('/api/wallet/bcon/callback/:secret', express.urlencoded({ extended: false, limit: '8kb' }), async (req, res) => {
+    const ok = !!config.bconSecret && crypto.timingSafeEqual(Buffer.from(sha(String(req.params.secret))), Buffer.from(secretHash));
+    if (!ok) return res.status(404).json({ error: 'Not found' });
+    // Right secret while still on paper money: answer, so Bcon's dashboard
+    // can check the URL, but don't act on anything.
+    if (config.payments !== 'bcon') return res.type('text/plain').send('ok paper');
+    try {
+      const r = await ctx.track(ctx.wallet.notify({ ...req.query, ...(req.body && typeof req.body === 'object' ? req.body : {}) }));
+      res.type('text/plain').send(`ok ${r}`);
+    } catch (e) {
+      console.error('bcon callback', e.message);
+      res.status(503).type('text/plain').send('retry');
+    }
+  });
+
   // CSRF: state-changing calls must carry a header a cross-site form cannot set.
   app.use('/api', (req, res, next) => {
     if (req.method === 'GET') return next();
@@ -294,7 +319,8 @@ export async function createApp(opts = {}) {
       minWithdraw: config.minWithdraw,
       bots: botList(),
       bot: { minutes: config.botMinutes, min: config.botStakeMin, max: config.botStakeMax },
-      coins: coinList(),
+      coins: ctx.wallet.coins(),
+      payments: config.payments,
       chat: CHAT_PRESETS,
       counts: ctx.matchmaker.counts(),
     });
@@ -371,14 +397,20 @@ export async function createApp(opts = {}) {
 
   // ---- wallet ----
   app.get('/api/wallet', needUser, wrap(async (req, res) => {
-    res.json({ ...(await ctx.wallet.overview(req.user.id)), user: await publicUser(req.user), coins: coinList(), feeBps: config.withdrawFeeBps, minWithdraw: config.minWithdraw });
+    res.json({
+      ...(await ctx.wallet.overview(req.user.id)), user: await publicUser(req.user), coins: ctx.wallet.coins(), payments: config.payments,
+      feeBps: config.withdrawFeeBps, minWithdraw: config.minWithdraw, minDeposit: config.bconMinDeposit, maxDeposit: config.bconMaxDeposit,
+    });
+  }));
+  app.get('/api/wallet/deposits/:id', needUser, wrap(async (req, res) => {
+    res.json({ deposit: await ctx.wallet.invoice(req.user.id, Number(req.params.id)) });
   }));
   app.post('/api/wallet/address', needUser, needActive, wrap(async (req, res) => {
     res.json(await ctx.wallet.address(req.user.id, String(req.body?.coin || '')));
   }));
   app.post('/api/wallet/deposit', needUser, needActive, wrap(async (req, res) => {
     const amount = Math.round(Number(req.body?.amount));
-    res.json({ deposit: await ctx.wallet.testDeposit(req.user, String(req.body?.coin || ''), amount) });
+    res.json({ deposit: await ctx.wallet.deposit(req.user, String(req.body?.coin || ''), amount) });
   }));
   app.post('/api/wallet/withdraw', needUser, needActive, wrap(async (req, res) => {
     const amount = Math.round(Number(req.body?.amount));
@@ -498,6 +530,25 @@ export async function createApp(opts = {}) {
     await ctx.enforcement.clearReview(id);
     res.json({ ok: true });
   }));
+  app.get('/api/admin/payments', needUser, needAdmin, wrap(async (req, res) => {
+    res.json(await ctx.wallet.staffView());
+  }));
+  app.post('/api/admin/withdrawals/:id/sent', needUser, needAdmin, wrap(async (req, res) => {
+    const txid = String(req.body?.txid || '').trim();
+    if (!/^[A-Za-z0-9]{8,128}$/.test(txid)) return res.status(400).json({ error: 'Paste the transaction id of the payment you sent' });
+    if (!(await ctx.wallet.completeWithdraw(Number(req.params.id), txid))) return res.status(409).json({ error: 'This withdrawal is no longer open, or the account is suspended' });
+    res.json({ ok: true });
+  }));
+  app.post('/api/admin/withdrawals/:id/reject', needUser, needAdmin, wrap(async (req, res) => {
+    const note = String(req.body?.note || '').trim().slice(0, 200);
+    if (!(await ctx.wallet.rejectWithdraw(Number(req.params.id), note))) return res.status(409).json({ error: 'This withdrawal is no longer open' });
+    res.json({ ok: true });
+  }));
+  app.post('/api/admin/users/:id/credit', needUser, needAdmin, wrap(async (req, res) => {
+    const amount = Math.round(Number(req.body?.amount));
+    const note = String(req.body?.note || '').trim().slice(0, 200);
+    res.json({ deposit: await ctx.wallet.manualCredit(Number(req.params.id), amount, req.body?.txid, String(req.body?.coin || '').slice(0, 16) || null, note) });
+  }));
   app.get('/api/admin/tickets', needUser, needAdmin, wrap(async (req, res) => {
     const tickets = await db.tickets.aggregate([
       { $addFields: { open: { $cond: [{ $eq: ['$status', 'open'] }, 1, 0] } } },
@@ -542,6 +593,7 @@ export async function createApp(opts = {}) {
     ctx.fairplay.closed = true;
     ctx.matchmaker.stop();
     ctx.enforcement.stop();
+    ctx.wallet.stop();
     ctx.games.shutdown();
     ctx.hub.close?.();
     await new Promise((r) => server.close(() => r()));

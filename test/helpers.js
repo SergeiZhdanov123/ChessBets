@@ -109,7 +109,8 @@ export async function checkBooks(db) {
     const s = sums.get(u.id) || 0;
     if (s !== u.balance) throw new Error(`user ${u.id}: ledger ${s} != balance ${u.balance}`);
   }
-  const deposits = await db.deposits.sum('$amount', { status: { $in: ['credited', 'forfeited'] } });
+  // Real deposits can credit a different amount from the one requested.
+  const deposits = await db.deposits.sum({ $ifNull: ['$credited', '$amount'] }, { status: { $in: ['credited', 'forfeited'] } });
   const paidOut = await db.withdrawals.sum('$net', { status: 'completed' });
   const inFlight = await db.withdrawals.sum('$amount', { status: { $in: ['processing', 'review'] } });
   const balances = await db.users.sum('$balance');

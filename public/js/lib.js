@@ -152,7 +152,7 @@ export const icon = (name, attrs = '') =>
 export const knightMark = `<svg viewBox="0 0 32 32" aria-hidden="true"><path fill="#00e701" d="M9 27h13.5l-.9-3.4c2.7-2.6 3.7-5.7 3.7-8.9 0-5-3.8-8.2-8.9-8.2L15 4.8l-1.1 2.4C10.8 8.3 9.2 10.5 8.3 12.8L5 16.3l1.7 2.3 3.6-1c1-.3 2-.1 2.6.4-2 2.4-3.8 5.3-3.9 9Z"/></svg>`;
 
 // Coin glyphs: flat discs with a letter, not brand marks.
-const COIN_COLORS = { BTC: '#f7931a', ETH: '#7b8cde', USDT: '#26a17b', USDC: '#2775ca', SOL: '#9b6dff', LTC: '#a6a9aa', DOGE: '#c2a633' };
+const COIN_COLORS = { BTC: '#f7931a', ETH: '#7b8cde', USDT: '#26a17b', USDC: '#2775ca', SOL: '#9b6dff', LTC: '#a6a9aa', DOGE: '#c2a633', TRX: '#e5312f', BNB: '#e0a90b' };
 export const coinIcon = (code) =>
   `<svg class="ci" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="10" fill="${COIN_COLORS[code] || '#557086'}"/><text x="10" y="13.6" text-anchor="middle" font-size="${code.length > 3 ? 6.4 : 8}" font-weight="800" fill="#fff" font-family="Figtree, sans-serif">${code === 'BTC' ? '₿' : code === 'ETH' ? 'Ξ' : code[0]}</text></svg>`;
 

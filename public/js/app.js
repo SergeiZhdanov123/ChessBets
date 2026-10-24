@@ -107,7 +107,7 @@ function renderSidebar() {
         ${navLink('/support', 'help', 'Support')}
         ${u?.isAdmin ? navLink('/admin', 'admin', 'Admin') : ''}
       </div>
-      <p class="side-note">Paper money. Balances have no cash value.</p>
+      ${store.config?.payments === 'bcon' ? '' : '<p class="side-note">Paper money. Balances have no cash value.</p>'}
     </div>`;
   el.querySelector('#sideToggle').onclick = () => {
     if (window.innerWidth <= 1000) { shell.classList.toggle('side-open'); return; }
@@ -201,12 +201,14 @@ function renderFooter() {
     <div class="footer-in">
       <div>
         <a class="logo" href="/" style="margin-bottom:10px;display:inline-flex">${knightMark}<span>ChessBets</span></a>
-        <p>Wagered chess against real opponents and house bots. This edition runs on paper money: deposits and withdrawals are simulated and balances have no cash value. 18+ only.</p>
+        <p>${store.config?.payments === 'bcon'
+          ? 'Wagered chess against real opponents and house bots. Deposits and withdrawals in crypto. 18+ only.'
+          : 'Wagered chess against real opponents and house bots. This edition runs on paper money: deposits and withdrawals are simulated and balances have no cash value. 18+ only.'}</p>
       </div>
       <div><h4>Play</h4><a href="/play">Play a Human</a><a href="/bots">Play a Bot</a><a href="/games">My Games</a></div>
       <div><h4>Help</h4><a href="/fair-play">Fair Play</a><a href="/terms">Terms</a><a href="/support">Support</a></div>
       <div class="footer-coins">
-        ${coins.map((c) => `<span>${coinIcon(c.code)}${esc(c.code)}</span>`).join('')}
+        ${[...new Set(coins.map((c) => c.label || c.code))].map((l) => `<span>${coinIcon(l)}${esc(l)}</span>`).join('')}
         <span class="copy">© ${new Date().getFullYear()} ChessBets. Crypto only.</span>
       </div>
     </div>`;
@@ -250,8 +252,10 @@ bus.on('notice', (m) => {
   if (m.kind === 'ticket') toast('Support replied to your ticket', { kind: 'info', body: 'Open Support to read it.' });
 });
 bus.on('wallet', (m) => {
-  if (m.deposit?.status === 'credited') { sound.notify(); toast(`Deposit confirmed: ${money(m.deposit.amount)}`, { kind: 'ok', body: `${m.deposit.coin_amount} ${m.deposit.coin}` }); }
-  if (m.withdrawal?.status === 'completed') toast(`Withdrawal sent: ${money(m.withdrawal.net)}`, { kind: 'ok', body: `${m.withdrawal.coin_amount} ${m.withdrawal.coin}` });
+  const tag = (x) => [x.coin_amount, String(x.coin || '').split('-')[0]].filter(Boolean).join(' ');
+  if (m.deposit?.status === 'credited') { sound.notify(); toast(`Deposit confirmed: ${money(m.deposit.credited ?? m.deposit.amount)}`, { kind: 'ok', body: tag(m.deposit) }); }
+  if (m.withdrawal?.status === 'completed') toast(`Withdrawal sent: ${money(m.withdrawal.net)}`, { kind: 'ok', body: tag(m.withdrawal) });
+  if (m.withdrawal?.status === 'rejected') toast('Withdrawal declined', { kind: 'bad', body: `${money(m.withdrawal.amount)} is back in your balance.${m.withdrawal.note ? ` ${m.withdrawal.note}` : ''}`, ms: 8000 });
 });
 bus.on('error', (m) => { if (!m.silent) toast(m.message, { kind: 'bad' }); });
 

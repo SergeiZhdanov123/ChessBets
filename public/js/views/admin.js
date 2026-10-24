@@ -14,7 +14,7 @@ export default function admin(el, [userId]) {
   const box = el.querySelector('#a');
 
   async function load() {
-    const [o, t] = await Promise.all([api('/api/admin/overview'), api('/api/admin/tickets')]);
+    const [o, t, pay] = await Promise.all([api('/api/admin/overview'), api('/api/admin/tickets'), api('/api/admin/payments')]);
     const house = Object.fromEntries(o.house.map((h) => [h.kind, h]));
     const net = o.house.reduce((s, h) => s + h.total, 0);
     box.innerHTML = `
@@ -29,6 +29,8 @@ export default function admin(el, [userId]) {
         <table class="table"><tbody>${Object.entries(HOUSE_LABEL).map(([k, label]) => `<tr><td>${label}</td><td class="r num">${house[k]?.n || 0}</td><td class="r num strong">${money(house[k]?.total || 0, { sign: true })}</td></tr>`).join('')}</tbody></table>
       </div>
 
+      ${pay.mode === 'bcon' ? paymentsHtml(pay) : ''}
+
       <div class="section-head"><h2>${icon('search')}Find a player</h2></div>
       <div style="display:flex;gap:8px;margin-bottom:10px"><input class="input" id="q" placeholder="Username" style="max-width:320px"><button class="btn btn-gray" id="qs">Search</button></div>
       <div id="qr"></div>
@@ -41,11 +43,12 @@ export default function admin(el, [userId]) {
       </tbody></table></div>` : '<div class="empty card">Nobody is flagged.</div>'}
 
       <div class="section-head" style="margin-top:24px"><h2>${icon('clock')}Scheduled actions</h2></div>
-      ${o.pending.length ? `<table class="table"><tbody>${o.pending.map((a) => `<tr><td><a class="rowlink strong" href="/admin/${a.user_id}">${esc(a.username)}</a></td><td>${esc(a.kind)}</td><td>${esc(JSON.parse(a.payload || '{}')?.reason || '')}</td><td class="r">${dateTime(a.run_at)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty card">Nothing scheduled.</div>'}
+      ${o.pending.length ? `<table class="table"><tbody>${o.pending.map((a) => `<tr><td><a class="rowlink strong" href="/admin/${a.user_id}">${esc(a.username)}</a></td><td>${esc(a.kind)}</td><td>${esc((typeof a.payload === 'string' ? JSON.parse(a.payload || '{}') : a.payload)?.reason || '')}</td><td class="r">${dateTime(a.run_at)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty card">Nothing scheduled.</div>'}
 
       <div class="section-head" style="margin-top:24px"><h2>${icon('help')}Support tickets</h2></div>
       <div id="tk">${t.tickets.length ? '' : '<div class="empty card">No tickets.</div>'}</div>`;
 
+    if (pay.mode === 'bcon') wirePayments(box, load);
     const tk = box.querySelector('#tk');
     tk.innerHTML += t.tickets.map((x) => `
       <div class="ticket">
@@ -69,6 +72,76 @@ export default function admin(el, [userId]) {
   load().catch((e) => { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
 }
 
+const PAY_STATUS = { unmatched: 'Not matched', held: 'On hold (account suspended)', pending: 'Waiting on Bcon' };
+
+function paymentsHtml(p) {
+  const st = p.store;
+  const hook = `${location.origin}${st.callbackPath}`;
+  const chains = st.chains.map((c) => `<tr><td class="strong">${esc(c.chain)}</td><td class="num">${esc(c.wallet || '')}</td><td>${c.callbackOk ? '<span class="status ok">Callback set</span>' : '<span class="status bad">Callback URL missing</span>'}</td></tr>`).join('');
+  return `
+    <div class="section-head"><h2>${icon('wallet')}Payments</h2></div>
+    <div class="card card-pad" style="margin-bottom:18px">
+      ${st.connected
+        ? `<h3 style="font-size:15px;margin-bottom:8px">Bcon store ${esc(st.name || '')}</h3>
+           ${chains ? `<table class="table"><tbody>${chains}</tbody></table>` : '<div class="callout red">The store has no wallets yet. Add a Bitcoin xpub or a wallet address in the Bcon dashboard.</div>'}`
+        : '<div class="callout red">Not connected to Bcon. Check BCON_API_KEY, and that the Bcon account has a store with at least one wallet. Deposits are off until then.</div>'}
+      <div class="field-label" style="margin:12px 0 6px">Callback URL for every chain in the Bcon store settings</div>
+      <div style="display:flex;gap:8px"><input class="input num" readonly value="${esc(hook)}" id="hook"><button class="btn btn-gray" id="hook-cp">${icon('copy')}Copy</button></div>
+    </div>
+
+    <h3 style="font-size:15px;margin:0 0 8px">Withdrawals to send <span class="dim">${p.withdrawals.length}</span></h3>
+    ${p.withdrawals.length ? `<div class="table-wrap"><table class="table"><thead><tr><th>#</th><th>Player</th><th class="r">Send</th><th>To</th><th>Requested</th><th></th></tr></thead><tbody>
+      ${p.withdrawals.map((w) => `<tr>
+        <td class="num">${w.id}</td>
+        <td><a class="rowlink strong" href="/admin/${w.user_id}">${esc(w.username || '?')}</a>${w.status === 'review' || w.user_review ? ' <span class="status wait">review</span>' : ''}</td>
+        <td class="r num"><b>${money(w.net)}</b><div class="dim">${w.coin_now ? `about ${esc(w.coin_now)} ${esc(w.label)}` : esc(w.label)}</div></td>
+        <td style="white-space:normal;max-width:260px"><div class="dim">${esc(w.network || '')}</div><span class="num" style="word-break:break-all">${esc(w.address)}</span> <button class="btn btn-ghost btn-sm" data-copy="${esc(w.address)}">${icon('copy')}</button></td>
+        <td>${dateTime(w.created_at)}</td>
+        <td style="min-width:260px"><div style="display:flex;gap:6px"><input class="input" data-txid="${w.id}" placeholder="txid after sending" style="height:36px"><button class="btn btn-green btn-sm" data-sent="${w.id}">Mark sent</button><button class="btn btn-ghost btn-sm" data-decline="${w.id}" data-amt="${w.amount}" data-user="${esc(w.username || '')}">Decline</button></div></td>
+      </tr>`).join('')}
+    </tbody></table></div>` : '<div class="empty card" style="margin-bottom:18px">Nothing to send.</div>'}
+
+    ${p.problems.length ? `<h3 style="font-size:15px;margin:18px 0 8px">Payments that need a person</h3>
+    <div class="table-wrap"><table class="table"><thead><tr><th>Transaction</th><th>Coin</th><th class="r">Amount</th><th>Status</th><th>Player</th><th>Seen</th></tr></thead><tbody>
+      ${p.problems.map((x) => `<tr title="${esc(x.note || '')}">
+        <td class="num" style="word-break:break-all;white-space:normal;max-width:220px">${esc(x.id)}</td><td>${esc(x.coin || '')}</td><td class="r num">${esc(x.sum || '')}</td>
+        <td><span class="status ${x.status === 'pending' ? 'wait' : 'bad'}">${PAY_STATUS[x.status] || esc(x.status)}</span>${x.note ? `<div class="dim" style="white-space:normal">${esc(x.note)}</div>` : ''}</td>
+        <td>${x.user_id ? `<a class="rowlink" href="/admin/${x.user_id}">${esc(x.username || '?')}</a>` : ''}</td><td>${dateTime(x.first_seen)}</td></tr>`).join('')}
+    </tbody></table></div>
+    <p class="fine" style="margin:6px 0 0">To credit one of these, open the player and use Credit a deposit with the transaction id.</p>` : ''}
+
+    <h3 style="font-size:15px;margin:18px 0 8px">Recent deposits</h3>
+    ${p.deposits.length ? `<div class="table-wrap"><table class="table"><tbody>${p.deposits.map((d) => `<tr>
+      <td class="num">${d.id}</td><td><a class="rowlink strong" href="/admin/${d.user_id}">${esc(d.username || '?')}</a></td>
+      <td class="r num">${money(d.status === 'credited' ? d.credited : d.amount)}</td><td class="num">${d.coin_amount ? `${esc(d.coin_amount)} ${esc(d.label || '')}` : esc(d.kind === 'manual' ? 'by staff' : '')}</td>
+      <td>${esc(d.status)}</td><td class="r">${dateTime(d.created_at)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty card">No deposits yet.</div>'}
+    <div style="height:10px"></div>`;
+}
+
+function wirePayments(box, reload) {
+  box.querySelector('#hook-cp').onclick = async (e) => {
+    try { await navigator.clipboard.writeText(box.querySelector('#hook').value); } catch {}
+    e.currentTarget.innerHTML = `${icon('check')}Copied`;
+  };
+  box.querySelectorAll('[data-copy]').forEach((b) => (b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.copy); } catch {}
+    b.innerHTML = icon('check');
+  }));
+  box.querySelectorAll('[data-sent]').forEach((b) => (b.onclick = async () => {
+    const id = b.dataset.sent;
+    const txid = box.querySelector(`[data-txid="${id}"]`).value.trim();
+    if (!txid) return toast('Send the payment first, then paste its transaction id', { kind: 'bad' });
+    b.disabled = true;
+    try { await api(`/api/admin/withdrawals/${id}/sent`, { txid }); toast('Marked as sent', { kind: 'ok', ms: 2000 }); reload(); }
+    catch (e) { toast(e.message, { kind: 'bad' }); b.disabled = false; }
+  }));
+  box.querySelectorAll('[data-decline]').forEach((b) => (b.onclick = async () => {
+    if (!(await confirmBox('Decline this withdrawal?', `${money(+b.dataset.amt)}, fee included, goes back to ${b.dataset.user}'s balance.`, { ok: 'Decline', danger: true }))) return;
+    try { await api(`/api/admin/withdrawals/${b.dataset.decline}/reject`, { note: 'Declined by staff. Contact support for details.' }); reload(); }
+    catch (e) { toast(e.message, { kind: 'bad' }); }
+  }));
+}
+
 async function userPage(el, id) {
   el.innerHTML = '<div class="skel" style="height:300px"></div>';
   let d;
@@ -89,6 +162,17 @@ async function userPage(el, id) {
         ? `<button class="btn btn-green" data-act="reinstate-restore">Reinstate and restore ${money(u.forfeited)}</button><button class="btn btn-gray" data-act="reinstate">Reinstate without balance</button>`
         : `<button class="btn btn-red" data-act="suspend">Suspend</button>${u.review ? '<button class="btn btn-gray" data-act="clear">Clear review</button>' : ''}`}
     </div>
+
+    ${store.config?.payments === 'bcon' && u.status !== 'suspended' ? `
+    <div class="section-head"><h2>${icon('wallet')}Credit a deposit</h2></div>
+    <div class="card card-pad" style="margin-bottom:22px">
+      <p class="fine" style="margin-bottom:10px">For a payment that reached our wallet but wasn't matched, for example a short amount after an exchange fee. Check it on a block explorer first. Each transaction id can be credited once.</p>
+      <div style="display:grid;grid-template-columns:140px 1fr;gap:8px;margin-bottom:8px">
+        <div class="input-wrap"><span class="input-suffix">$</span><input class="input" id="mc-amt" inputmode="decimal" placeholder="0.00"></div>
+        <input class="input num" id="mc-tx" placeholder="Transaction id" spellcheck="false">
+      </div>
+      <div style="display:flex;gap:8px"><input class="input" id="mc-note" placeholder="Note shown to the player (optional)"><button class="btn btn-green" id="mc-go">Credit</button></div>
+    </div>` : ''}
 
     <div class="section-head"><h2>${icon('shield')}Game reports</h2></div>
     ${d.reports.length ? `<div class="table-wrap"><table class="table"><thead><tr><th>Game</th><th>Verdict</th><th class="r">Evidence</th><th class="r">Engine-level</th><th class="r">Hard moves</th><th class="r">Avg loss</th><th class="r">Time CV</th><th class="r">Tab away</th></tr></thead><tbody>
@@ -111,6 +195,19 @@ async function userPage(el, id) {
 
     <div class="section-head" style="margin-top:24px"><h2>${icon('wallet')}Ledger</h2></div>
     <table class="table"><tbody>${d.ledger.map((x) => `<tr><td class="strong">${esc(x.kind)}</td><td>${esc(x.note || x.ref || '')}</td><td class="r num ${x.amount > 0 ? 'green' : ''}">${money(x.amount, { sign: true })}</td><td class="r num">${money(x.balance_after)}</td><td class="r">${dateTime(x.created_at)}</td></tr>`).join('')}</tbody></table>`;
+
+  const mc = el.querySelector('#mc-go');
+  if (mc) mc.onclick = async () => {
+    const amount = Math.round(Number(el.querySelector('#mc-amt').value.replace(/[^0-9.]/g, '')) * 100);
+    const txid = el.querySelector('#mc-tx').value.trim();
+    if (!(amount > 0) || !txid) return toast('Enter the amount and the transaction id', { kind: 'bad' });
+    if (!(await confirmBox(`Credit ${money(amount)} to ${u.username}?`, `Against transaction ${txid.slice(0, 18)}... This can't be undone from here.`, { ok: 'Credit' }))) return;
+    try {
+      await api(`/api/admin/users/${id}/credit`, { amount, txid, note: el.querySelector('#mc-note').value.trim() });
+      toast('Credited', { kind: 'ok', ms: 2000 });
+      navigate(`/admin/${id}`, { replace: true });
+    } catch (e) { toast(e.message, { kind: 'bad' }); }
+  };
 
   el.querySelectorAll('[data-act]').forEach((b) => (b.onclick = async () => {
     const a = b.dataset.act;

@@ -30,6 +30,27 @@ In Atlas, under Network Access, allow `0.0.0.0/0`. Render's free instances don't
 
 To make yourself an admin, either start with `ADMIN_USERS=yourname node server.js` or run `npm run make-admin -- yourname` once the account exists.
 
+## Real crypto payments (Bcon)
+
+With `PAYMENTS=paper` (the default) deposits and withdrawals are simulated. With `PAYMENTS=bcon`, deposits are real payments through [Bcon Global](https://bcon.global), a non-custodial gateway: coins go straight to your own wallets and Bcon charges 1% from a balance you top up in its dashboard.
+
+Setup:
+
+1. In the Bcon dashboard, create a store and add a wallet for each chain you want: a Bitcoin xpub/zpub (Electrum: Wallet > Information > Master Public Key), a Tron address for USDT/USDC, and so on. Only public keys and addresses go to Bcon.
+2. Copy the key from the store settings into `BCON_API_KEY`. Generate `BCON_CALLBACK_SECRET` with `node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"`.
+3. Set `PAYMENTS=bcon` and deploy. In Admin > Payments, copy the callback URL and paste it into the store settings for every chain. Admin shows a red "Callback URL missing" next to any chain that doesn't have it.
+
+How it works:
+
+- A player picks a coin and a dollar amount. Bcon prices it and returns an address and an exact coin amount. Bitcoin gets a new address per deposit. Every other chain pays into your one wallet, and the exact amount (with a cent added for repeats) is what identifies the deposit.
+- Bcon's callback is only protected by the secret in its URL, so it is treated as a hint: each transaction is looked up again through Bcon's API with your key, checked against the deposit's address, coin and amount, and credited once per txid after 2 confirmations.
+- Every few minutes (`BCON_POLL_MS`) the server also asks Bcon about open deposits, which covers callbacks lost while the server was asleep.
+- Short payments are credited pro rata. A payment that arrives after its quote expired is valued at the quoted or the current price, whichever is lower.
+- Money reaching a suspended account is held, not credited or forfeited. Payments that match no deposit (for example an exchange took its fee out of the amount) show under "Payments that need a person"; credit them from the player's admin page with the txid.
+- Bcon has no payout API. Withdrawals wait in Admin > Payments: send the coins from your wallet, paste the txid, and press Mark sent (the 5% fee goes to the house then). Decline returns the full amount to the player.
+
+Real-money wagering is regulated almost everywhere. Get legal advice before you switch this on.
+
 ## What's in it
 
 **Play a Human.** Six queues: 3 or 10 minutes, $1, $5 or $10, no increment. No ratings. Every second the matchmaker shuffles each queue and pairs people at random. It prefers opponents you haven't met recently. The only hard block is two accounts in the same browser. Games between accounts that share a device history or an IP are allowed but logged for fair-play review (set `BLOCK_SAME_IP=1` to refuse same-IP pairings).
@@ -46,7 +67,7 @@ To make yourself an admin, either start with `ADMIN_USERS=yourname node server.j
 | $1 / $5 / $10 win | $1.92 / $9.60 / $19.20 |
 | Draw returns | $0.96 / $4.80 / $9.60 per player |
 | Withdrawal fee | 5%, minimum withdrawal $5 |
-| Currencies | BTC, ETH, USDT, USDC, SOL, LTC, DOGE (reference rates, display only) |
+| Currencies | Paper: BTC, ETH, USDT, USDC, SOL, LTC, DOGE at reference rates. Bcon: whichever chains the store has wallets for (BTC, USDT/USDC on Tron, Ethereum, BNB Chain and Solana, ETH, TRX, BNB, SOL) |
 
 Deposit addresses look like `demo-btc-...` on purpose, so nobody can send real coins to one. A "test deposit" walks through confirmations and then credits the balance.
 
@@ -109,7 +130,8 @@ src/bots.js          bot personas and opening books
 src/engine.js        UCI driver and engine pools
 src/anticheat.js     fair-play model and analysis service
 src/enforcement.js   review, suspension, refunds, scheduled actions
-src/wallet.js        simulated crypto deposits and withdrawals
+src/wallet.js        deposits and withdrawals, paper or through Bcon
+src/bcon.js          Bcon Global API client
 src/money.js         ledger helpers and payout math
 src/db.js            MongoDB connection, indexes, transactions
 public/              single-page client, no build step
@@ -139,6 +161,13 @@ The server tests check after every scenario that each user's ledger sums to thei
 | `BOT_WIN_SUSPEND_MIN_MS` / `MAX_MS` | 2h / 5h | |
 | `BLOCK_SAME_IP` | off | `1` refuses to pair two accounts on one IP |
 | `REGISTER_PER_HOUR` / `LOGIN_PER_MINUTE` | 5 / 12 | per IP |
+| `PAYMENTS` | paper | `bcon` for real crypto payments |
+| `BCON_API_KEY` | | key from the Bcon store settings |
+| `BCON_CALLBACK_SECRET` | | 24+ random characters, part of the callback URL |
+| `BCON_COINS` | all the store supports | limit what's offered, e.g. `BTC,USDT-TRC20` |
+| `BCON_STORE_ID` | first store | if the account has several |
+| `BCON_MIN_DEPOSIT` / `BCON_MAX_DEPOSIT` | 1000 / 500000 | cents |
+| `BCON_POLL_MS` | 180000 | how often open deposits are re-checked |
 
 Live games and the queues live in the server's memory, so run one instance. On restart, unfinished games are voided and every open stake is returned.
 

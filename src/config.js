@@ -48,6 +48,21 @@ export const config = {
   analysisEngines: num(env.ANALYSIS_ENGINES, 2),
   analysisNodes: num(env.ANALYSIS_NODES, 500_000),
 
+  // Payments. 'paper' simulates deposits and withdrawals; 'bcon' takes real
+  // crypto through Bcon Global (see src/bcon.js and the README).
+  payments: env.PAYMENTS === 'bcon' ? 'bcon' : 'paper',
+  bconKey: env.BCON_API_KEY || env.BCON || '',
+  bconSecret: env.BCON_CALLBACK_SECRET || '',
+  bconApi: (env.BCON_API_URL || 'https://external-api.bcon.global').replace(/\/+$/, ''),
+  bconStoreId: env.BCON_STORE_ID || '',
+  bconChains: (env.BCON_CHAINS || '').split(',').map((s) => s.trim()).filter(Boolean),
+  bconCoins: (env.BCON_COINS || '').split(',').map((s) => s.trim().toUpperCase()).filter(Boolean),
+  bconMinDeposit: num(env.BCON_MIN_DEPOSIT, 1000),
+  bconMaxDeposit: num(env.BCON_MAX_DEPOSIT, 500_000),
+  bconInvoiceMs: num(env.BCON_INVOICE_MS, 60 * 60_000),
+  bconPollMs: num(env.BCON_POLL_MS, 3 * 60_000),
+  bconOpenInvoices: 3,
+
   depositConfirmMs: num(env.DEPOSIT_CONFIRM_MS, 1500),
   withdrawProcessMs: num(env.WITHDRAW_PROCESS_MS, 2500),
   scheduleTickMs: num(env.SCHEDULE_TICK_MS, 15_000),
