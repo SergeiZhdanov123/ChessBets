@@ -13,7 +13,7 @@ export default function play(el, _params, query) {
   const cfg = store.config;
   const sel = {
     tc: [3, 10].includes(+query.get('tc')) ? +query.get('tc') : last.tc,
-    stake: [100, 500, 1000].includes(+query.get('stake')) ? +query.get('stake') : last.stake,
+    stake: [100, 500, 1000].includes(+(query.get('entry') ?? query.get('stake'))) ? +(query.get('entry') ?? query.get('stake')) : last.stake,
   };
   const key = () => `${sel.tc}:${sel.stake}`;
   const q = () => cfg.queues.find((x) => x.key === key());
@@ -60,12 +60,12 @@ export default function play(el, _params, query) {
         <button data-tc="10" class="${sel.tc === 10 ? 'on' : ''}" ${lockSel ? 'disabled' : ''}>10 min</button>
       </div>
       <div class="field">
-        <div class="field-label">Wager <span class="aside num">${u ? `Balance ${money(u.balance)}` : ''}</span></div>
+        <div class="field-label">Entry fee <span class="aside num">${u ? `Balance ${money(u.balance)}` : ''}</span></div>
         <div class="chips">${[100, 500, 1000].map((s) => `<button class="chip ${sel.stake === s ? 'on' : ''}" data-stake="${s}" ${lockSel ? 'disabled' : ''}>${money(s).replace('.00', '')}</button>`).join('')}</div>
       </div>
       <div class="field">
-        <div class="field-label">Profit on win</div>
-        <div class="readout num"><span class="green">${money(info.win - info.stake)}</span><span class="unit">${money(info.win)} back</span></div>
+        <div class="field-label">Prize if you win</div>
+        <div class="readout num"><span class="green">${money(info.win)}</span><span class="unit">both entries less ${cfg.rakeBps / 100}%</span></div>
       </div>
       <div class="field">
         <div class="field-label">On a draw</div>
@@ -78,7 +78,7 @@ export default function play(el, _params, query) {
             <span>${icon(x.tc === 3 ? 'bolt' : 'clock', 'style="width:14px;height:14px;vertical-align:-2px;margin-right:6px"')}${x.tc} min · ${money(x.stake).replace('.00', '')}</span>
             ${POPULAR.has(x.key) ? '<span class="popular">Most popular</span>' : ''}</button>`).join('')}
       </div>
-      <p class="panel-note">No ratings. You are paired at random with someone else in the same queue. A ${cfg.rakeBps / 100}% rake comes out of the pot on every game that gets played, draws included. Games aborted before both players move are refunded in full. <a href="/fair-play">Fair Play rules</a> apply.</p>`;
+      <p class="panel-note">No ratings. You are paired at random with someone else in the same queue. The prize is both entry fees less a ${cfg.rakeBps / 100}% service fee, which applies to every game that gets played, draws included. Games cancelled before both players move are refunded in full. <a href="/fair-play">Fair Play rules</a> apply.</p>`;
 
     panel.querySelectorAll('[data-tc]').forEach((b) => (b.onclick = () => { sel.tc = +b.dataset.tc; remember(); paint(); }));
     panel.querySelectorAll('[data-stake]').forEach((b) => (b.onclick = () => { sel.stake = +b.dataset.stake; remember(); paint(); }));
@@ -96,7 +96,7 @@ export default function play(el, _params, query) {
       <div class="search-card">
         <div class="pulse"></div>
         <h3>Finding an opponent</h3>
-        <div class="muted">${inQ.tc} min · ${money(inQ.stake)} wager</div>
+        <div class="muted">${inQ.tc} min · ${money(inQ.stake)} entry</div>
         <div class="t">Waiting <span id="el">0:00</span></div>
         ${note ? `<p class="fine" style="margin-top:10px;max-width:240px">${esc(note)}</p>` : ''}
       </div>`;
@@ -112,7 +112,7 @@ export default function play(el, _params, query) {
   function remember() {
     last = { ...sel };
     try { localStorage.setItem('cb-queue', JSON.stringify(last)); } catch {}
-    history.replaceState({}, '', `/play?tc=${sel.tc}&stake=${sel.stake}`);
+    history.replaceState({}, '', `/play?tc=${sel.tc}&entry=${sel.stake}`);
   }
 
   function act(a) {
@@ -136,7 +136,7 @@ export default function play(el, _params, query) {
   paint();
 
   if (query.get('go') === '1' && store.user && !store.queue && !store.activeGame) {
-    history.replaceState({}, '', `/play?tc=${sel.tc}&stake=${sel.stake}`);
+    history.replaceState({}, '', `/play?tc=${sel.tc}&entry=${sel.stake}`);
     if (store.user.balance >= sel.stake) act('join');
     else openWallet('deposit');
   }

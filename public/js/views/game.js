@@ -324,8 +324,8 @@ export default function gameView(el, [id]) {
         <span class="dim" style="font-weight:600;font-size:12.5px">${active() ? 'Live' : 'Finished'}</span>
       </div>
       <div class="gp-pot">
-        <div class="box"><span>Wager</span><b>${money(g.stake)}</b></div>
-        <div class="box"><span>Win pays (after rake)</span><b class="green">${money(g.payouts.win)}</b></div>
+        <div class="box"><span>Entry fee</span><b>${money(g.stake)}</b></div>
+        <div class="box"><span>Prize if you win</span><b class="green">${money(g.payouts.win)}</b></div>
       </div>
       <div class="muted" style="font-weight:600;margin:0 2px 10px;min-height:20px" id="status">${statusLine()}</div>
       ${offer}
@@ -379,7 +379,7 @@ export default function gameView(el, [id]) {
   }
 
   function again() {
-    return `<a class="btn btn-green" href="/play?tc=${g.tc}&stake=${g.stake}&go=1">New game</a>`;
+    return `<a class="btn btn-green" href="/play?tc=${g.tc}&entry=${g.stake}&go=1">New game</a>`;
   }
 
   function moveList() {
@@ -416,11 +416,11 @@ export default function gameView(el, [id]) {
     const titles = { win: 'You won', loss: 'You lost', draw: 'Draw', aborted: 'Game aborted', over: g.result === '1/2-1/2' ? 'Draw' : g.result === '1-0' ? 'White won' : 'Black won' };
     let amount = '', sub = '';
     if (mine) {
-      if (o === 'win') { amount = `<div class="amount green">${money(paid - g.stake, { sign: true })}</div>`; sub = `${money(paid)} paid out${g.kind === 'human' && g.settlement?.rake ? ` · ${money(g.settlement.rake)} rake` : ''}`; }
-      if (o === 'loss') { amount = `<div class="amount">${money(-g.stake)}</div>`; sub = 'Wager lost'; }
-      if (o === 'draw') { amount = `<div class="amount">${money(paid)}</div>`; sub = g.kind === 'human' ? `returned · ${money(g.stake - paid)} rake` : 'Wager returned'; }
-      if (o === 'aborted') { amount = `<div class="amount">${money(g.stake)}</div>`; sub = 'Wager returned in full'; }
-      if (g.reason === 'fair-play' && o === 'win') sub = 'Your opponent was removed for fair play. You receive the whole pot.';
+      if (o === 'win') { amount = `<div class="amount green">${money(paid)}</div>`; sub = 'Prize added to your balance'; }
+      if (o === 'loss') { amount = `<div class="amount">${money(-g.stake)}</div>`; sub = 'Entry fee'; }
+      if (o === 'draw') { amount = `<div class="amount">${money(paid)}</div>`; sub = `Entry fee returned, less ${money(g.stake - paid)} service fee`; }
+      if (o === 'aborted') { amount = `<div class="amount">${money(g.stake)}</div>`; sub = 'Entry fee returned in full'; }
+      if (g.reason === 'fair-play' && o === 'win') sub = 'Your opponent was removed for fair play. You receive both entry fees.';
     }
     resEl.innerHTML = `
       <div class="result ${o === 'win' ? 'win' : ''}">
@@ -436,7 +436,7 @@ export default function gameView(el, [id]) {
   // ---- actions ----
   async function action(a) {
     if (a === 'resign') {
-      if (await confirmBox('Resign this game?', `You will lose your ${money(g.stake)} wager.`, { ok: 'Resign', danger: true })) ws.send({ t: 'resign', id: g.id });
+      if (await confirmBox('Resign this game?', `You will lose your ${money(g.stake)} entry fee.`, { ok: 'Resign', danger: true })) ws.send({ t: 'resign', id: g.id });
     }
     if (a === 'abort') ws.send({ t: 'abort', id: g.id });
     if (a === 'draw') { ws.send({ t: 'draw-offer', id: g.id }); g.drawOffer = you(); paintPanel(); }

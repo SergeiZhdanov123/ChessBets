@@ -70,9 +70,9 @@ function terms() {
     <h2>3. Words we use</h2>
     <ul>
       <li><b>Competition:</b> one game between two members in one of the queues.</li>
-      <li><b>Entry fee:</b> what you pay to enter a competition. On the site it is shown as your wager or stake.</li>
-      <li><b>Prize:</b> what the winner of a competition receives, shown as "Win pays" before you join a queue.</li>
-      <li><b>Service fee:</b> our fee for running a competition, ${rake}% of the two entry fees combined (shown on the site as the rake).</li>
+      <li><b>Entry fee:</b> what you pay to enter a competition.</li>
+      <li><b>Prize:</b> what the winner of a competition receives, shown as "Prize if you win" before you join a queue.</li>
+      <li><b>Service fee:</b> our fee for running a competition, ${rake}% of the two entry fees combined.</li>
       <li><b>Balance:</b> the US dollar amount credited to your account, which can only be used as described in Section 7.</li>
     </ul>
 

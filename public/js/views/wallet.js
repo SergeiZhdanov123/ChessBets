@@ -2,8 +2,8 @@ import { api, openModal, money, esc, icon, coinIcon, toast, dateTime, ago } from
 import { store, bus } from '../store.js';
 
 const KIND = {
-  deposit: 'Deposit', withdrawal: 'Withdrawal', withdrawal_refund: 'Withdrawal declined', stake: 'Wager placed', stake_return: 'Wager returned',
-  win: 'Win', draw: 'Draw', forfeit: 'Forfeited', fairplay_refund: 'Fair-play refund', reinstated: 'Balance restored',
+  deposit: 'Deposit', withdrawal: 'Withdrawal', withdrawal_refund: 'Withdrawal declined', stake: 'Entry fee', stake_return: 'Entry fee returned',
+  win: 'Prize', draw: 'Draw refund', forfeit: 'Forfeited', fairplay_refund: 'Fair-play refund', reinstated: 'Balance restored',
 };
 
 let state = { tab: 'deposit', coin: null, wcoin: null, data: null, invoice: null };

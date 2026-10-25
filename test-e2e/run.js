@@ -110,8 +110,8 @@ const alice = await newUser('alice_e2e', { fund: 19_300 });
 
 const bob = await newUser('bob_e2e', { fund: 5_000 });
 
-await check('human game: queue, match, moves, chat, draw offer, rake on the draw', async () => {
-  await alice.goto(base + '/play?tc=10&stake=500&go=1');
+await check('human game: queue, match, moves, chat, draw offer, service fee on the draw', async () => {
+  await alice.goto(base + '/play?tc=10&entry=500&go=1');
   await alice.waitForSelector('.search-card');
   await bob.goto(base + '/play?tc=10&stake=500&go=1');
   await alice.waitForURL(/\/game\//, { timeout: 10_000 });

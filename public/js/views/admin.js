@@ -3,7 +3,7 @@ import { store } from '../store.js';
 import { navigate } from '../app.js';
 
 const HOUSE_LABEL = {
-  rake: 'Rake', withdraw_fee: 'Withdrawal fees', account_closed: 'Balances of removed accounts',
+  rake: 'Service fees', withdraw_fee: 'Withdrawal fees', account_closed: 'Balances of removed accounts',
   forfeit: 'Forfeited balances', fairplay_refund: 'Fair-play refunds', reinstated: 'Restored balances',
 };
 
@@ -37,7 +37,7 @@ export default function admin(el, [userId]) {
         <table class="table"><tbody>${Object.entries(HOUSE_LABEL).map(([k, label]) => `<tr><td>${label}</td><td class="r num">${house[k]?.n || 0}</td><td class="r num strong">${money(house[k]?.total || 0, { sign: true })}</td></tr>`).join('')}${other.n ? `<tr><td>Other</td><td class="r num">${other.n}</td><td class="r num strong">${money(other.total, { sign: true })}</td></tr>` : ''}</tbody></table>
       </div>
 
-      ${o.unsettled.length ? `<div class="callout red" style="margin-bottom:18px"><b>${o.unsettled.length} finished game${o.unsettled.length === 1 ? '' : 's'} not settled yet.</b> The stakes are held and the server retries every 30 seconds; nothing needs doing unless this stays. ${o.unsettled.map((g) => `<a class="rowlink num" href="/game/${esc(g.id)}">${esc(g.white_name)} v ${esc(g.black_name)} (${esc(g.final_status === 'aborted' ? 'aborted' : g.result)}, ${money(g.stake)})</a>`).join(', ')}</div>` : ''}
+      ${o.unsettled.length ? `<div class="callout red" style="margin-bottom:18px"><b>${o.unsettled.length} finished game${o.unsettled.length === 1 ? '' : 's'} not settled yet.</b> The entry fees are held and the server retries every 30 seconds; nothing needs doing unless this stays. ${o.unsettled.map((g) => `<a class="rowlink num" href="/game/${esc(g.id)}">${esc(g.white_name)} v ${esc(g.black_name)} (${esc(g.final_status === 'aborted' ? 'aborted' : g.result)}, ${money(g.stake)})</a>`).join(', ')}</div>` : ''}
 
       ${pay.mode === 'crypto' ? paymentsHtml(pay) : ''}
 
@@ -73,7 +73,7 @@ export default function admin(el, [userId]) {
     box.querySelector('#siteSwitch').onclick = async () => {
       const on = !o.maintenance;
       if (on && !(await confirmBox('Make the site unavailable?',
-        'Players see only the unavailable notice until you reopen it. Games in progress are voided and both stakes returned, and anyone waiting in a queue gets their stake back. Deposits keep being credited.',
+        'Players see only the unavailable notice until you reopen it. Games in progress are cancelled with both entry fees returned, and anyone waiting in a queue gets their entry fee back. Deposits keep being credited.',
         { ok: 'Make unavailable', danger: true }))) return;
       try {
         const r = await api('/api/admin/maintenance', { on });
@@ -85,7 +85,7 @@ export default function admin(el, [userId]) {
       const approve = b.dataset.d === 'approve';
       const row = o.refunds.find((r) => String(r.id) === b.dataset.refund);
       if (!(await confirmBox(approve ? `Refund ${money(row.amount)} to ${row.username}?` : 'Decline this refund?',
-        approve ? 'Their stake from this game goes back to their balance.' : 'Nothing is paid. You can still credit them by hand later.',
+        approve ? 'Their entry fee from this game goes back to their balance.' : 'Nothing is paid. You can still credit them by hand later.',
         { ok: approve ? 'Approve' : 'Decline', danger: !approve }))) return;
       try { await api(`/api/admin/refunds/${b.dataset.refund}/${b.dataset.d}`, {}); toast(approve ? 'Refund paid' : 'Refund declined', { kind: 'ok', ms: 2000 }); load(); }
       catch (e) { toast(e.message, { kind: 'bad' }); }

@@ -15,25 +15,25 @@ export default function home(el) {
     <div class="banners">
       <a class="banner" href="/play">
         <h3>Play a Human</h3>
-        <p>Random opponent, real stakes. 3 or 10 minutes for $1, $5 or $10.</p>
+        <p>Random opponent, real prizes. 3 or 10 minute games with $1, $5 or $10 entry.</p>
         <span class="btn btn-gray btn-sm">Find a game</span>
         <div class="banner-art mini-board">${miniBoard}</div>
       </a>
       <a class="banner" href="/wallet">
         <h3>Deposit in crypto</h3>
-        <p>Fund your balance with ${esc(coinNames)}. Withdraw your winnings the same way.</p>
+        <p>Fund your balance with ${esc(coinNames)}. Withdraw your prizes the same way.</p>
         <span class="btn btn-gray btn-sm">Open wallet</span>
         <div class="banner-art coins">${coins.slice(0, 3).map((c) => coinIcon(c)).join('')}</div>
       </a>
       <a class="banner" href="/fair-play">
         <h3>Fair play, checked every move</h3>
-        <p>Every game is analysed. Cheaters lose their balance, and the players they beat can have their wager refunded after review.</p>
+        <p>Every game is analysed. Cheaters lose their balance, and the players they beat can have their entry fee refunded after review.</p>
         <span class="btn btn-gray btn-sm">How it works</span>
         <div class="banner-art shield">${icon('shield', 'stroke-width="1.4"')}</div>
       </a>
     </div>
 
-    <div class="stats-strip" id="stats" hidden><span hidden><span class="live-dot"></span><b class="num" data-k="online"></b>online</span><span hidden><b class="num" data-k="playing"></b>games in progress</span><span hidden><b class="num" data-k="games24h"></b>games today</span><span hidden><b class="num" data-k="wagered24h"></b>wagered today</span></div>
+    <div class="stats-strip" id="stats" hidden><span hidden><span class="live-dot"></span><b class="num" data-k="online"></b>online</span><span hidden><b class="num" data-k="playing"></b>games in progress</span><span hidden><b class="num" data-k="games24h"></b>games today</span><span hidden><b class="num" data-k="wagered24h"></b>in entry fees today</span></div>
 
     <section class="section">
       <div class="section-head"><h2>${icon('users')}Play a Human</h2><a class="btn btn-ghost btn-sm" href="/play">View all</a></div>
@@ -44,8 +44,8 @@ export default function home(el) {
       <div class="section-head"><h2>${icon('help')}How it works</h2><a class="btn btn-ghost btn-sm" href="/terms">Full rules</a></div>
       <div class="steps">
         <div class="step"><span class="step-n">1</span><b>Deposit</b><p>Send ${esc(coinNames)} to your wallet address. It shows up in your balance once the network confirms it.</p></div>
-        <div class="step"><span class="step-n">2</span><b>Pick a queue</b><p>3 or 10 minutes, for ${cfg.queues.filter((q) => q.tc === cfg.queues[0].tc).map((q) => money(q.stake).replace('.00', '')).join(', ').replace(/, ([^,]*)$/, ' or $1')}. You're paired at random with someone on the same queue. No ratings.</p></div>
-        <div class="step"><span class="step-n">3</span><b>Win the pot</b><p>A ${money(sample.stake).replace('.00', '')} game pays the winner ${money(sample.win)} after the ${cfg.rakeBps / 100}% rake. A draw returns ${money(sample.draw)} each. Withdrawals carry a ${fee}% fee.</p></div>
+        <div class="step"><span class="step-n">2</span><b>Pick a queue</b><p>3 or 10 minutes, with an entry fee of ${cfg.queues.filter((q) => q.tc === cfg.queues[0].tc).map((q) => money(q.stake).replace('.00', '')).join(', ').replace(/, ([^,]*)$/, ' or $1')}. You're paired at random with someone on the same queue. No ratings.</p></div>
+        <div class="step"><span class="step-n">3</span><b>Win the prize</b><p>A ${money(sample.stake).replace('.00', '')} entry game pays the winner ${money(sample.win)} after the ${cfg.rakeBps / 100}% service fee. A draw returns ${money(sample.draw)} each. Withdrawals carry a ${fee}% fee.</p></div>
       </div>
     </section>
 
@@ -54,7 +54,7 @@ export default function home(el) {
         <div class="tabs"><button class="on">My games</button></div>
       </div>
       <div class="table-wrap"><table class="table">
-        <thead><tr><th>Game</th><th>Player</th><th>Time</th><th class="r">Wager</th><th class="r">Payout</th></tr></thead>
+        <thead><tr><th>Game</th><th>Player</th><th>Time</th><th class="r">Entry fee</th><th class="r">Prize</th></tr></thead>
         <tbody id="feed"><tr><td colspan="5"><div class="skel" style="height:20px"></div></td></tr></tbody>
       </table></div>
     </section>` : ''}`;
@@ -62,10 +62,10 @@ export default function home(el) {
   const qEl = el.querySelector('#queues');
   const paintQueues = () => {
     qEl.innerHTML = cfg.queues.map((q) => `
-        <a class="qtile" href="/play?tc=${q.tc}&stake=${q.stake}&go=1">
+        <a class="qtile" href="/play?tc=${q.tc}&entry=${q.stake}&go=1">
           <div class="qtile-top"><span class="qtile-stake num">${money(q.stake).replace('.00', '')}</span>
             <span class="qtile-tc">${icon(q.tc === 3 ? 'bolt' : 'clock')}${q.tc} min</span></div>
-          <div class="qtile-foot"><span>Win <span class="win num">${money(q.win)}</span></span>
+          <div class="qtile-foot"><span>Prize <span class="win num">${money(q.win)}</span></span>
             ${POPULAR.has(q.key) ? '<span class="popular">Most popular</span>' : ''}</div>
         </a>`).join('');
   };

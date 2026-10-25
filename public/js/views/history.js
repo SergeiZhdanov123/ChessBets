@@ -27,11 +27,11 @@ export default function historyView(el) {
       <div class="kpis">
         <div class="kpi"><span>Games played</span><b>${totals.played}</b></div>
         <div class="kpi"><span>Won</span><b>${totals.won}</b></div>
-        <div class="kpi"><span>Wagered</span><b>${money(totals.wagered)}</b></div>
+        <div class="kpi"><span>Entry fees</span><b>${money(totals.wagered)}</b></div>
         <div class="kpi"><span>Net result</span><b class="${totals.net > 0 ? 'green' : ''}">${money(totals.net, { sign: true })}</b></div>
       </div>
       <div class="table-wrap"><table class="table">
-        <thead><tr><th>Game</th><th>Opponent</th><th>Result</th><th>Date</th><th class="r">Wager</th><th class="r">Net</th></tr></thead>
+        <thead><tr><th>Game</th><th>Opponent</th><th>Result</th><th>Date</th><th class="r">Entry fee</th><th class="r">Net</th></tr></thead>
         <tbody>${games.map((g) => {
           const net = g.outcome === 'aborted' ? 0 : g.payout - g.stake;
           const res = { win: '<span class="green">Won</span>', loss: 'Lost', draw: 'Draw', aborted: 'Aborted' }[g.outcome];

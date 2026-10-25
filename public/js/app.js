@@ -195,8 +195,8 @@ function renderFooter() {
       <div>
         <a class="logo" href="/" style="margin-bottom:10px;display:inline-flex">${knightMark}<span>ChessBets</span></a>
         <p>${store.config?.payments === 'crypto'
-          ? 'Wagered chess against real opponents. Deposits and withdrawals in crypto. 18+ only.'
-          : 'Wagered chess against real opponents. This edition runs on paper money: deposits and withdrawals are simulated and balances have no cash value. 18+ only.'}</p>
+          ? 'Skill-based chess competitions against real opponents. Deposits and withdrawals in crypto. 18+ only.'
+          : 'Skill-based chess competitions against real opponents. This edition runs on paper money: deposits and withdrawals are simulated and balances have no cash value. 18+ only.'}</p>
       </div>
       <div><h4>Play</h4><a href="/play">Play a Human</a><a href="/games">My Games</a></div>
       <div><h4>Help</h4><a href="/fair-play">Fair Play</a><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/legal">Legal Basis</a><a href="/support">Support</a></div>
@@ -235,7 +235,7 @@ bus.on('matched', (m) => {
 bus.on('suspended', () => { refreshMe(); });
 bus.on('reinstated', () => { refreshMe(); toast('Your account has been reinstated', { kind: 'ok' }); });
 bus.on('notice', (m) => {
-  if (m.kind === 'refund') { sound.notify(); toast(`Refunded ${money(m.amount)}`, { kind: 'ok', body: 'An opponent who beat you was removed for fair play. Your stake is back.', ms: 8000 }); }
+  if (m.kind === 'refund') { sound.notify(); toast(`Refunded ${money(m.amount)}`, { kind: 'ok', body: 'An opponent who beat you was removed for fair play. Your entry fee is back.', ms: 8000 }); }
   if (m.kind === 'ticket') toast('Support replied to your ticket', { kind: 'info', body: 'Open Support to read it.' });
 });
 bus.on('wallet', (m) => {
