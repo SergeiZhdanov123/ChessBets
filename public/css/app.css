@@ -326,6 +326,7 @@ select.input { appearance: none; padding-right: 30px; background-image: url("dat
 
 .stats-strip { display: flex; gap: 28px; margin: 22px 2px 0; color: var(--text-2); font-weight: 600; flex-wrap: wrap; }
 .stats-strip b { color: var(--text); font-weight: 700; margin-right: 6px; }
+.stats-strip[hidden], .stats-strip [hidden] { display: none; }
 .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); display: inline-block; margin-right: 8px; vertical-align: 1px; }
 
 .queue-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }

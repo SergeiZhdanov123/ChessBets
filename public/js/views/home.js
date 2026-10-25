@@ -30,7 +30,7 @@ export default function home(el) {
       </a>
     </div>
 
-    <div class="stats-strip" id="stats"><span><span class="live-dot"></span><b class="num" data-k="online">-</b>online</span><span><b class="num" data-k="playing">-</b>games in progress</span><span><b class="num" data-k="games24h">-</b>games today</span><span><b class="num" data-k="wagered24h">-</b>wagered today</span></div>
+    <div class="stats-strip" id="stats" hidden><span hidden><span class="live-dot"></span><b class="num" data-k="online"></b>online</span><span hidden><b class="num" data-k="playing"></b>games in progress</span><span hidden><b class="num" data-k="games24h"></b>games today</span><span hidden><b class="num" data-k="wagered24h"></b>wagered today</span></div>
 
     <section class="section">
       <div class="section-head"><h2>${icon('users')}Play a Human</h2><a class="btn btn-ghost btn-sm" href="/play">View all</a></div>
@@ -120,8 +120,15 @@ export default function home(el) {
   async function loadStats() {
     try {
       const s = await api('/api/stats');
-      for (const k of ['online', 'playing', 'games24h']) statsEl.querySelector(`[data-k=${k}]`).textContent = s[k].toLocaleString('en-US');
-      statsEl.querySelector('[data-k=wagered24h]').textContent = money(s.wagered24h);
+      let any = false;
+      for (const k of ['online', 'playing', 'games24h', 'wagered24h']) {
+        const b = statsEl.querySelector(`[data-k=${k}]`);
+        const show = s[k] != null;
+        b.parentElement.hidden = !show;
+        if (show) b.textContent = k === 'wagered24h' ? money(s[k]) : s[k].toLocaleString('en-US');
+        any ||= show;
+      }
+      statsEl.hidden = !any;
     } catch {}
   }
   loadStats();

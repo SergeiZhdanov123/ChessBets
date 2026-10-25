@@ -399,6 +399,21 @@ test('chat: typed messages reach only the opponent, cleaned and rate limited', a
   a.close(); b.close(); c.close();
 });
 
+test('lobby stats: numbers below their minimum are withheld', async () => {
+  const c = await player(0);
+  const { config } = await import('../src/config.js');
+  const saved = { ...config.statsMin };
+  try {
+    Object.assign(config.statsMin, { online: 1_000_000, playing: 1_000_000, games24h: 1_000_000, wagered24h: 1_000_000_000 });
+    assert.deepEqual((await c.req('/api/stats')).data, { online: null, playing: null, games24h: null, wagered24h: null });
+    Object.assign(config.statsMin, { online: 1, playing: 0, games24h: 0, wagered24h: 0 });
+    const s = (await c.req('/api/stats')).data;
+    assert.ok(s.online >= 1);
+    for (const k of ['playing', 'games24h', 'wagered24h']) assert.equal(typeof s[k], 'number', k);
+  } finally { Object.assign(config.statsMin, saved); }
+  c.close();
+});
+
 test('bot stake limits', async () => {
   const a = await player(20_000);
   assert.equal((await a.req('/api/bots/play', { bot: 'magnus', stake: 50 })).status, 400);

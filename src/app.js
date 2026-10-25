@@ -396,12 +396,15 @@ export async function createApp(opts = {}) {
       db.games.count(recent),
       db.games.sum({ $cond: [{ $eq: ['$kind', 'human'] }, { $multiply: ['$stake', 2] }, '$stake'] }, recent),
     ]);
-    res.json({
+    const stats = {
       online: ctx.hub.online(),
       playing: [...ctx.games.live.values()].filter((g) => g.status === 'active').length,
       games24h,
       wagered24h,
-    });
+    };
+    // Numbers below their minimum go out as null and the lobby leaves them out.
+    for (const k of Object.keys(stats)) if (stats[k] < (config.statsMin[k] ?? 0)) stats[k] = null;
+    res.json(stats);
   }));
 
   // ---- wallet ----

@@ -34,6 +34,14 @@ export const config = {
   botStakeMin: 100,
   botStakeMax: 10_000,
   botMoveScale: num(env.BOT_MOVE_SCALE, 1),     // tests shrink think time
+  // Lobby stats strip: a number is only shown once it reaches its minimum,
+  // and the strip is hidden while none do. 0 shows it always.
+  statsMin: {
+    online: num(env.STATS_MIN_ONLINE, 10),
+    playing: num(env.STATS_MIN_PLAYING, 3),
+    games24h: num(env.STATS_MIN_GAMES, 25),
+    wagered24h: num(env.STATS_MIN_WAGERED_CENTS, 50_000),
+  },
   botStopDepth: num(env.BOT_STOP_DEPTH, 22),    // a bot search ends early at this depth
   botWinSuspendMinMs: num(env.BOT_WIN_SUSPEND_MIN_MS, 2 * HOUR),
   botWinSuspendMaxMs: num(env.BOT_WIN_SUSPEND_MAX_MS, 5 * HOUR),

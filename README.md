@@ -65,6 +65,7 @@ Real-money wagering is regulated almost everywhere. Get legal advice before you 
 | | |
 |---|---|
 | Rake | 3% of the pot on every human game that is played, draws included. Aborted games (no first move) are refunded in full. |
+| Lobby stats | Each number in the strip under the banners (online, games in progress, games today, wagered today) shows only once it reaches its minimum: 10, 3, 25 and $500 by default (`STATS_MIN_ONLINE`, `STATS_MIN_PLAYING`, `STATS_MIN_GAMES`, `STATS_MIN_WAGERED_CENTS`). The strip is hidden while none do. Set a minimum to 0 to always show it. |
 | $1 / $5 / $10 win | $1.92 / $9.60 / $19.20 |
 | Draw returns | $0.96 / $4.80 / $9.60 per player |
 | Withdrawal fee | 5%, minimum withdrawal $5 |
