@@ -49,19 +49,15 @@ export default function home(el) {
       </div>
     </section>
 
-    <section class="section">
+    ${store.user ? `<section class="section">
       <div class="section-head">
-        <div class="tabs" id="feedTabs">
-          <button data-f="all" class="on">All games</button>
-          <button data-f="high">High stakes</button>
-          ${store.user ? '<button data-f="mine">My games</button>' : ''}
-        </div>
+        <div class="tabs"><button class="on">My games</button></div>
       </div>
       <div class="table-wrap"><table class="table">
         <thead><tr><th>Game</th><th>Player</th><th>Time</th><th class="r">Wager</th><th class="r">Payout</th></tr></thead>
         <tbody id="feed"><tr><td colspan="5"><div class="skel" style="height:20px"></div></td></tr></tbody>
       </table></div>
-    </section>`;
+    </section>` : ''}`;
 
   const qEl = el.querySelector('#queues');
   const paintQueues = () => {
@@ -75,7 +71,6 @@ export default function home(el) {
   };
   paintQueues();
 
-  let filter = 'all';
   let rows = [];
   const tbody = el.querySelector('#feed');
   const row = (r, fresh) => {
@@ -90,27 +85,16 @@ export default function home(el) {
   const paintFeed = (freshCount = 0) => {
     tbody.innerHTML = rows.length
       ? rows.map((r, i) => row(r, i < freshCount)).join('')
-      : `<tr><td colspan="5"><div class="empty">${filter === 'mine' ? 'You have not finished a game yet.' : 'No finished games yet. Be the first.'}</div></td></tr>`;
+      : '<tr><td colspan="5"><div class="empty">You have not finished a game yet.</div></td></tr>';
   };
   async function loadFeed() {
     try {
-      if (filter === 'mine') {
-        const r = await api('/api/my/games');
-        rows = r.games.filter((g) => g.outcome !== 'aborted').slice(0, 20).map((g) => ({ game: g.id, user: store.user.username, kind: g.kind, tc: g.tc, stake: g.stake, payout: g.payout, outcome: g.outcome, at: g.at }));
-      } else {
-        rows = (await api(`/api/feed?f=${filter}`)).rows;
-      }
+      const r = await api('/api/my/games');
+      rows = r.games.filter((g) => g.outcome !== 'aborted').slice(0, 20).map((g) => ({ game: g.id, user: store.user.username, kind: g.kind, tc: g.tc, stake: g.stake, payout: g.payout, outcome: g.outcome, at: g.at }));
       paintFeed();
     } catch { tbody.innerHTML = '<tr><td colspan="5"><div class="empty">Could not load games.</div></td></tr>'; }
   }
-  el.querySelector('#feedTabs').addEventListener('click', (e) => {
-    const b = e.target.closest('[data-f]');
-    if (!b) return;
-    filter = b.dataset.f;
-    el.querySelectorAll('#feedTabs button').forEach((x) => x.classList.toggle('on', x === b));
-    loadFeed();
-  });
-  loadFeed();
+  if (tbody) loadFeed();
 
   const statsEl = el.querySelector('#stats');
   async function loadStats() {
@@ -132,13 +116,13 @@ export default function home(el) {
 
   const offs = [
     bus.on('feed', (m) => {
-      const incoming = m.rows.filter((r) => filter === 'all' || (filter === 'high' && r.stake >= 1000) || (filter === 'mine' && r.user === store.user?.username));
-      if (!incoming.length) return;
+      const incoming = m.rows.filter((r) => r.user === store.user?.username);
+      if (!tbody || !incoming.length) return;
       rows = [...incoming, ...rows].slice(0, 20);
       paintFeed(incoming.length);
     }),
   ];
   // Keep relative times fresh.
-  const tick = setInterval(() => paintFeed(), 30_000);
+  const tick = setInterval(() => tbody && paintFeed(), 30_000);
   return () => { offs.forEach((f) => f()); clearInterval(statsTimer); clearInterval(tick); };
 }
