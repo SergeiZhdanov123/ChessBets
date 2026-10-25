@@ -28,7 +28,7 @@ Set `MONGODB_URI` (and `MONGODB_DB` if you want a name other than `chessbets`) u
 
 In Atlas, under Network Access, allow `0.0.0.0/0`. Render's free instances don't have fixed outbound IPs.
 
-To make yourself an admin, either start with `ADMIN_USERS=yourname node server.js` or run `npm run make-admin -- yourname` once the account exists.
+To make yourself an admin, register the account, then run `npm run make-admin -- yourname` (with `.env` pointing at the same database). Signing up never makes anyone an admin.
 
 ## Real crypto payments
 
@@ -154,7 +154,7 @@ The server tests check after every scenario that each user's ledger sums to thei
 | `PORT` / `HOST` | 3000 / 0.0.0.0 | |
 | `MONGODB_URI` | | required |
 | `MONGODB_DB` | chessbets | database name |
-| `ADMIN_USERS` | | comma-separated usernames |
+| `LOGIN_FAILS_PER_ACCOUNT` | 10 | wrong passwords allowed per account in 15 minutes, from any IP |
 | `ANALYSIS_NODES` | 500000 | per position, fair-play analysis |
 | `ANALYSIS_ENGINES` | 2 | |
 | `BLOCK_SAME_IP` | off | `1` refuses to pair two accounts on one IP |

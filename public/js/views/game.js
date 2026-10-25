@@ -9,6 +9,7 @@ const VALUES = { p: 1, n: 3, b: 3, r: 5, q: 9 };
 const START = { p: 8, n: 2, b: 2, r: 2, q: 1 };
 
 export default function gameView(el, [id]) {
+  el.classList.add('page-game');
   el.innerHTML = `
     <div class="stage">
       <div class="panel" id="gp"><div class="skel" style="height:200px"></div></div>

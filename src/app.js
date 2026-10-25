@@ -147,8 +147,6 @@ export async function createApp(opts = {}) {
   await ctx.wallet.resumePending();
   await ctx.enforcement.tick();
 
-  if (config.adminUsers.length) await db.users.updateMany({ username_lc: { $in: config.adminUsers } }, { $set: { is_admin: 1 } });
-
   // ---- site on/off ----
   // Admins can make the site unavailable to players. The switch lives in
   // the database so a restart or redeploy keeps it where it was.
@@ -321,6 +319,22 @@ export async function createApp(opts = {}) {
   }
 
   const authLimit = limiter(config.loginPerMinute, 60_000);
+  // Wrong passwords per account, from any IP, so a password can't be
+  // guessed by spreading attempts over many addresses. Too many locks that
+  // account's sign-in until the 15-minute window passes.
+  const FAIL_WINDOW = 15 * 60_000;
+  const failed = new Map(); // username_lc -> { at, n }
+  const lockedOut = (name) => {
+    const f = failed.get(name);
+    return !!f && Date.now() - f.at < FAIL_WINDOW && f.n >= config.loginFailsPerAccount;
+  };
+  function noteFailure(name) {
+    const t = Date.now();
+    if (failed.size > 20_000) for (const [k, f] of failed) if (t - f.at > FAIL_WINDOW) failed.delete(k);
+    const f = failed.get(name);
+    if (!f || t - f.at > FAIL_WINDOW) failed.set(name, { at: t, n: 1 });
+    else f.n++;
+  }
   const registerLimit = limiter(config.registerPerHour, 3600_000);
 
   app.post('/api/register', wrap(async (req, res) => {
@@ -336,7 +350,7 @@ export async function createApp(opts = {}) {
     const doc = {
       _id: id, username: name, username_lc: name.toLowerCase(), pass_hash: hashPassword(password), balance: 0,
       status: 'active', suspended_at: null, suspend_reason: null, forfeited: 0, review: 0,
-      is_admin: config.adminUsers.includes(name.toLowerCase()) ? 1 : 0,
+      is_admin: 0, // admins are made with `npm run make-admin`, never by signing up
       created_at: Date.now(), created_ip: req.ip2, device_id: req.device, last_ip: null, last_seen: null,
     };
     try { await db.users.insert(doc); }
@@ -349,8 +363,14 @@ export async function createApp(opts = {}) {
   app.post('/api/login', wrap(async (req, res) => {
     if (!authLimit(req.ip2)) return res.status(429).json({ error: 'Too many attempts. Wait a minute.' });
     const { username, password } = req.body || {};
-    const user = await db.users.findOne({ username_lc: String(username || '').trim().toLowerCase() });
-    if (!user || typeof password !== 'string' || !checkPassword(password, user.pass_hash)) return res.status(401).json({ error: 'Wrong username or password' });
+    const name = String(username || '').trim().toLowerCase().slice(0, 32);
+    if (lockedOut(name)) return res.status(429).json({ error: 'Too many wrong passwords for this account. Try again in 15 minutes.' });
+    const user = await db.users.findOne({ username_lc: name });
+    if (!user || typeof password !== 'string' || !checkPassword(password, user.pass_hash)) {
+      noteFailure(name);
+      return res.status(401).json({ error: 'Wrong username or password' });
+    }
+    failed.delete(name);
     await startSession(res, user, req);
     res.json({ user: await publicUser(user) });
   }));

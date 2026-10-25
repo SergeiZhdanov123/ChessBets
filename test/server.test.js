@@ -508,6 +508,22 @@ test('restart: a finished game that never settled pays the winner instead of voi
   await two.close();
 });
 
+test('sign-up never makes an admin; wrong passwords lock one account from any IP', async () => {
+  const c = new Client(app.base);
+  process.env.ADMIN_USERS = 'lockme'; // the old way of naming admins does nothing now
+  try { await c.register('lockme'); } finally { delete process.env.ADMIN_USERS; }
+  assert.equal(c.user.isAdmin, false);
+  assert.equal((await c.req('/api/admin/overview')).status, 404);
+  assert.equal((await new Client(app.base).req('/api/register', { username: 'LockMe', password: 'password123', adult: true, terms: true })).status, 409, 'taken in any case');
+
+  const guesser = new Client(app.base);
+  for (let i = 0; i < 10; i++) assert.equal((await guesser.req('/api/login', { username: 'lockme', password: `guess-${i}` })).status, 401);
+  const locked = await new Client(app.base).req('/api/login', { username: 'LOCKME', password: 'password123' });
+  assert.equal(locked.status, 429, 'locked even with the right password, from a fresh client');
+  assert.match(locked.data.error, /15 minutes/);
+  assert.equal((await guesser.req('/api/login', { username: 'someone_else', password: 'x' })).status, 401, 'other accounts are unaffected');
+});
+
 test('admin can make the site unavailable, and it survives a restart', async () => {
   const shared = { analysisPool: app.ctx.analysisPool };
   const one = await boot(shared);

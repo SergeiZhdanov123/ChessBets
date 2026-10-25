@@ -74,5 +74,5 @@ export const config = {
   sessionDays: 30,
   registerPerHour: num(env.REGISTER_PER_HOUR, 5),
   loginPerMinute: num(env.LOGIN_PER_MINUTE, 12),
-  adminUsers: (env.ADMIN_USERS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+  loginFailsPerAccount: num(env.LOGIN_FAILS_PER_ACCOUNT, 10), // per 15 minutes, from any IP
 };

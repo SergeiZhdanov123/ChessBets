@@ -7,6 +7,7 @@ import path from 'node:path';
 import net from 'node:net';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright-core';
+import { MongoClient } from 'mongodb';
 import { testMongo, testDbName } from '../test/mongo.js';
 
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
@@ -15,10 +16,11 @@ const port = await new Promise((r) => { const s = net.createServer().listen(0, (
 const base = `http://127.0.0.1:${port}`;
 
 const mongoUri = await testMongo();
+const e2eDb = testDbName('e2e');
 const server = spawn(process.execPath, ['server.js'], {
   cwd: root,
   env: {
-    ...process.env, PORT: String(port), HOST: '127.0.0.1', MONGODB_URI: mongoUri, MONGODB_DB: testDbName('e2e'), ADMIN_USERS: 'e2eadmin', PAYMENTS: 'paper',
+    ...process.env, PORT: String(port), HOST: '127.0.0.1', MONGODB_URI: mongoUri, MONGODB_DB: e2eDb, PAYMENTS: 'paper',
     DEPOSIT_CONFIRM_MS: '150', WITHDRAW_PROCESS_MS: '200', REGISTER_PER_HOUR: '1000', ANALYSIS_NODES: '50000',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -162,6 +164,9 @@ await check('withdrawal shows the 5% fee and completes', async () => {
 
 await check('suspension: banner, no refund message, play blocked, support reachable', async () => {
   const admin = await newUser('e2eadmin');
+  const mc = await MongoClient.connect(mongoUri);
+  await mc.db(e2eDb).collection('users').updateOne({ username_lc: 'e2eadmin' }, { $set: { is_admin: 1 } });
+  await mc.close();
   await admin.goto(base + '/admin');
   await admin.fill('#q', 'bob_e2e');
   await admin.click('#qs');

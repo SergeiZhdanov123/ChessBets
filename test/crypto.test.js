@@ -58,11 +58,12 @@ before(async () => {
     PAYMENTS: 'crypto', BTC_XPUB: ZPUB,
     BTC_API: `http://127.0.0.1:9/btc,${base}/btc`, // the first explorer is down
     BTC_PRICE_URLS: `${base}/price`, TRON_ADDRESS: TRON, TRON_API: `${base}/tron`,
-    CRYPTO_POLL_MS: '3600000', ADMIN_USERS: 'boss',
+    CRYPTO_POLL_MS: '3600000',
   });
   app = await boot();
   admin = new Client(app.base);
   await admin.register('boss');
+  await app.ctx.db.users.update({ _id: admin.user.id }, { $set: { is_admin: 1 } });
 });
 after(async () => {
   await app?.close();
