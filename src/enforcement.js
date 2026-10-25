@@ -1,8 +1,8 @@
 import { config } from './config.js';
 
 // Everything that changes an account's standing lives here: review holds,
-// suspensions, refund requests for people who lost to a cheater, and the delayed
-// action that follows a win against a house bot.
+// suspensions, refund requests for people who lost to a cheater, and
+// scheduled actions.
 export function createEnforcement(ctx) {
   const { db, money, hub } = ctx;
   const now = () => Date.now();
@@ -82,8 +82,7 @@ export function createEnforcement(ctx) {
     const g = ctx.games.activeFor(userId);
     if (g) {
       const color = g.colorOf(userId);
-      if (g.kind === 'human' && g.ply >= 2) await g.end({ result: color === 'w' ? '0-1' : '1-0', reason: 'fair-play', fairplay: { color } });
-      else if (g.ply >= 2) await g.end({ result: color === 'w' ? '0-1' : '1-0', reason: 'fair-play' });
+      if (g.ply >= 2) await g.end({ result: color === 'w' ? '0-1' : '1-0', reason: 'fair-play', fairplay: { color } });
       else await g.end({ status: 'aborted', reason: 'fair-play' });
     }
 
@@ -164,27 +163,7 @@ export function createEnforcement(ctx) {
   }
 
   async function gameEnded(g) {
-    if (g.kind === 'bot') {
-      const color = g.white.userId ? 'w' : 'b';
-      const userId = g.side(color).userId;
-      const won = (g.result === '1-0' && color === 'w') || (g.result === '0-1' && color === 'b');
-      if (won) {
-        // No human beats this engine at thirty minutes. Treat the win as
-        // engine assistance: hold withdrawals now, suspend a few hours later.
-        await event(userId, g.id, 'bot_win', `Beat ${g.side(color === 'w' ? 'b' : 'w').bot} for ${g.stake} cents`);
-        await db.users.update({ _id: userId }, { $set: { review: 1 } });
-        const span = Math.max(0, config.botWinSuspendMaxMs - config.botWinSuspendMinMs);
-        const delay = config.botWinSuspendMinMs + Math.floor(Math.random() * (span + 1));
-        await schedule('suspend', userId, delay, {
-          reason: 'Engine assistance: won a game against a house bot', game: g.id, refund: true,
-        });
-      } else if (g.result === '1/2-1/2' && g.reason !== 'agreement') {
-        await event(userId, g.id, 'bot_draw', g.reason);
-      }
-      return;
-    }
-
-    // Human games: patterns that suggest two accounts working together.
+    // Patterns that suggest two accounts working together.
     const short = g.ply < 12 && ['resign', 'abandoned', 'timeout'].includes(g.reason);
     if (short && g.result !== '1/2-1/2') {
       const loser = g.result === '1-0' ? g.black.userId : g.white.userId;

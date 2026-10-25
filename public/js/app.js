@@ -7,7 +7,6 @@ import { openWallet } from './views/wallet.js';
 const routes = [
   [/^\/$/, () => import('./views/home.js')],
   [/^\/play$/, () => import('./views/play.js')],
-  [/^\/bots(?:\/(\w+))?$/, () => import('./views/bots.js')],
   [/^\/game\/([\w-]+)$/, () => import('./views/game.js')],
   [/^\/games$/, () => import('./views/history.js')],
   [/^\/(fair-play|terms|privacy)$/, () => import('./views/pages.js')],
@@ -78,27 +77,21 @@ function navLink(href, ic, label, extra = '') {
   return `<a class="side-link ${on ? 'on' : ''}" href="${href}" title="${esc(label)}">${icon(ic)}<span>${esc(label)}</span>${extra}</a>`;
 }
 
-function totalWaiting() {
-  return Object.values(store.counts || {}).reduce((a, b) => a + b, 0);
-}
-
 function renderSidebar() {
   const u = store.user;
   const el = document.getElementById('sidebar');
-  const waiting = totalWaiting();
   el.innerHTML = `
     <div class="sidebar-top">
       <button class="icon-btn" id="sideToggle" aria-label="Toggle menu">${icon('menu')}</button>
       <div class="side-tabs">
-        <a class="side-tab ${location.pathname.startsWith('/play') ? 'on' : ''}" href="/play">Human</a>
-        <a class="side-tab ${location.pathname.startsWith('/bots') ? 'on' : ''}" href="/bots">Bots</a>
+        <a class="side-tab ${location.pathname === '/' ? 'on' : ''}" href="/">Lobby</a>
+        <a class="side-tab ${location.pathname.startsWith('/play') ? 'on' : ''}" href="/play">Play</a>
       </div>
     </div>
     <div class="side-scroll">
       <div class="side-group">
         ${navLink('/', 'home', 'Lobby')}
-        ${navLink('/play', 'users', 'Play a Human', waiting ? `<span class="count">${waiting} waiting</span>` : '')}
-        ${navLink('/bots', 'bot', 'Play a Bot')}
+        ${navLink('/play', 'users', 'Play a Human')}
       </div>
       <div class="side-group">
         ${u ? navLink('/games', 'history', 'My Games') : ''}
@@ -202,10 +195,10 @@ function renderFooter() {
       <div>
         <a class="logo" href="/" style="margin-bottom:10px;display:inline-flex">${knightMark}<span>ChessBets</span></a>
         <p>${store.config?.payments === 'crypto'
-          ? 'Wagered chess against real opponents and house bots. Deposits and withdrawals in crypto. 18+ only.'
-          : 'Wagered chess against real opponents and house bots. This edition runs on paper money: deposits and withdrawals are simulated and balances have no cash value. 18+ only.'}</p>
+          ? 'Wagered chess against real opponents. Deposits and withdrawals in crypto. 18+ only.'
+          : 'Wagered chess against real opponents. This edition runs on paper money: deposits and withdrawals are simulated and balances have no cash value. 18+ only.'}</p>
       </div>
-      <div><h4>Play</h4><a href="/play">Play a Human</a><a href="/bots">Play a Bot</a><a href="/games">My Games</a></div>
+      <div><h4>Play</h4><a href="/play">Play a Human</a><a href="/games">My Games</a></div>
       <div><h4>Help</h4><a href="/fair-play">Fair Play</a><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/support">Support</a></div>
       <div class="footer-coins">
         ${[...new Set(coins.map((c) => c.label || c.code))].map((l) => `<span>${coinIcon(l)}${esc(l)}</span>`).join('')}
@@ -220,7 +213,7 @@ function renderMobileNav() {
   el.innerHTML = `
     <a href="/" class="${p === '/' ? 'on' : ''}">${icon('home')}Lobby</a>
     <a href="/play" class="${p.startsWith('/play') ? 'on' : ''}">${icon('users')}Human</a>
-    <a href="/bots" class="${p.startsWith('/bots') ? 'on' : ''}">${icon('bot')}Bots</a>
+    <a href="/fair-play" class="${p.startsWith('/fair-play') ? 'on' : ''}">${icon('shield')}Fair Play</a>
     <button data-w>${icon('wallet')}Wallet</button>
     <button data-m>${icon('menu')}Menu</button>`;
   el.querySelector('[data-w]').onclick = () => (store.user ? openWallet() : openAuth('login'));
@@ -230,12 +223,6 @@ function renderMobileNav() {
 // ---- global reactions ----
 bus.on('store', (patch) => {
   if ('user' in patch) { renderHeader(); renderSidebar(); renderSuspended(); }
-  if ('counts' in patch) {
-    const c = document.querySelector('.side-link .count');
-    const n = totalWaiting();
-    if (c) c.textContent = `${n} waiting`;
-    else if (n && 'counts' in patch) renderSidebar();
-  }
 });
 bus.on('balance-up', () => {
   const b = document.getElementById('balBtn');

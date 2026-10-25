@@ -1,4 +1,4 @@
-import { esc, money, icon } from '../lib.js';
+import { esc, money, icon, POPULAR } from '../lib.js';
 import { store, bus, ws } from '../store.js';
 import { Board } from '../board.js';
 import { sound } from '../sound.js';
@@ -74,12 +74,9 @@ export default function play(el, _params, query) {
       ${action}
       <div class="qlist">
         <h4>All queues</h4>
-        ${cfg.queues.map((x) => {
-          const n = store.counts?.[x.key] || 0;
-          return `<button class="qrow ${x.key === key() ? 'on' : ''}" data-key="${x.key}" ${lockSel ? 'disabled' : ''}>
+        ${cfg.queues.map((x) => `<button class="qrow ${x.key === key() ? 'on' : ''}" data-key="${x.key}" ${lockSel ? 'disabled' : ''}>
             <span>${icon(x.tc === 3 ? 'bolt' : 'clock', 'style="width:14px;height:14px;vertical-align:-2px;margin-right:6px"')}${x.tc} min · ${money(x.stake).replace('.00', '')}</span>
-            <span class="waiting ${n ? 'some' : ''}"><i></i>${n} waiting</span></button>`;
-        }).join('')}
+            ${POPULAR.has(x.key) ? '<span class="popular">Most popular</span>' : ''}</button>`).join('')}
       </div>
       <p class="panel-note">No ratings. You are paired at random with someone else in the same queue. A ${cfg.rakeBps / 100}% rake comes out of the pot on every game that gets played, draws included. Games aborted before both players move are refunded in full. <a href="/fair-play">Fair Play rules</a> apply.</p>`;
 
@@ -94,14 +91,13 @@ export default function play(el, _params, query) {
     clearInterval(timer);
     const inQ = store.queue;
     if (!inQ) { over.innerHTML = ''; return; }
-    const others = Math.max(0, (store.counts?.[inQ.key] || 1) - 1);
     over.innerHTML = `
       <div class="board-dim" style="border-radius:4px"></div>
       <div class="search-card">
         <div class="pulse"></div>
         <h3>Finding an opponent</h3>
         <div class="muted">${inQ.tc} min · ${money(inQ.stake)} wager</div>
-        <div class="t"><span id="el">0:00</span> · ${others ? `${others} other${others > 1 ? 's' : ''} waiting` : 'You are first in line'}</div>
+        <div class="t">Waiting <span id="el">0:00</span></div>
         ${note ? `<p class="fine" style="margin-top:10px;max-width:240px">${esc(note)}</p>` : ''}
       </div>`;
     const elT = over.querySelector('#el');
@@ -132,7 +128,7 @@ export default function play(el, _params, query) {
   }
 
   const offs = [
-    bus.on('store', (p) => { if ('queue' in p || 'user' in p || 'counts' in p || 'activeGame' in p) paint(); }),
+    bus.on('store', (p) => { if ('queue' in p || 'user' in p || 'activeGame' in p) paint(); }),
     bus.on('queue', (m) => { note = ''; if (m.state === 'left' && m.why === 'disconnected') paint(); }),
     bus.on('queue-note', (m) => { note = m.note; paintOverlay(); }),
     bus.on('error', (m) => { if (m.code) paint(); }),

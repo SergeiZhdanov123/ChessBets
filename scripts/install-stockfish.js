@@ -1,10 +1,10 @@
 // Runs after `npm install`. Hosts like Render's native Node runtime have no
-// Stockfish, and without it the bots never move. If no working engine is
+// Stockfish, which the fair-play analysis needs. If no working engine is
 // found, download the official Stockfish 19 Linux build into bin/stockfish.
 //
 // Skipped when STOCKFISH_PATH is set, when `stockfish` on the PATH works, or
 // when bin/stockfish is already there and works. SKIP_STOCKFISH=1 skips it
-// entirely (the server then refuses bot games).
+// entirely (fair-play analysis is then off).
 import { spawnSync, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';

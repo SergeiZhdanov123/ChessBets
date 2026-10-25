@@ -1,9 +1,5 @@
 // Shared harness: boots the real app on a random port with a fresh database
 // on a throwaway local MongoDB.
-process.env.BOT_MOVE_SCALE ??= '0.05';
-process.env.BOT_ENGINES ??= '1';
-process.env.BOT_THREADS ??= '1';
-process.env.BOT_HASH_MB ??= '16';
 process.env.ANALYSIS_ENGINES ??= '2';
 process.env.ANALYSIS_NODES ??= '20000';
 process.env.DEPOSIT_CONFIRM_MS ??= '20';

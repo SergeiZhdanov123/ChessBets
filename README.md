@@ -10,7 +10,7 @@ node server.js          # http://localhost:3000
 Needs:
 
 - Node 22.13+.
-- Stockfish. On Linux x86-64 with none installed, `npm install` downloads the official Stockfish 19 build into `bin/stockfish` (checksum pinned in `scripts/install-stockfish.js`) and the install fails if that doesn't work. On a Mac, `brew install stockfish`. `STOCKFISH_PATH` overrides both.
+- Stockfish, for the fair-play analysis. On Linux x86-64 with none installed, `npm install` downloads the official Stockfish 19 build into `bin/stockfish` (checksum pinned in `scripts/install-stockfish.js`) and the install fails if that doesn't work. On a Mac, `brew install stockfish`. `STOCKFISH_PATH` overrides both.
 - A MongoDB connection string in `MONGODB_URI`. Locally, put it in a `.env` file next to `server.js`:
 
 ```
@@ -24,7 +24,7 @@ MongoDB has to be a replica set, because money moves use transactions. Every Atl
 
 ### Render
 
-Set `MONGODB_URI` (and `MONGODB_DB` if you want a name other than `chessbets`) under Environment. Nothing needs a disk. The build command must run `npm install` (or `npm ci`), which is what puts Stockfish on the instance; without an engine the server refuses new bot games instead of letting a bot sit on its clock.
+Set `MONGODB_URI` (and `MONGODB_DB` if you want a name other than `chessbets`) under Environment. Nothing needs a disk. The build command must run `npm install` (or `npm ci`), which is what puts Stockfish on the instance; without an engine, fair-play analysis is off.
 
 In Atlas, under Network Access, allow `0.0.0.0/0`. Render's free instances don't have fixed outbound IPs.
 
@@ -54,9 +54,9 @@ Real-money wagering is regulated almost everywhere. Get legal advice before you 
 
 ## What's in it
 
-**Play a Human.** Six queues: 3 or 10 minutes, $1, $5 or $10, no increment. No ratings. Every second the matchmaker shuffles each queue and pairs people at random. It prefers opponents you haven't met recently. The only hard block is two accounts in the same browser. Games between accounts that share a device history or an IP are allowed but logged for fair-play review (set `BLOCK_SAME_IP=1` to refuse same-IP pairings).
+**Play a Human.** Six queues: 3 or 10 minutes, $1, $5 or $10, no increment. No ratings. The two $5 queues carry a "Most popular" badge (`POPULAR` in `public/js/lib.js`); players don't see how many people are waiting. Every second the matchmaker shuffles each queue and pairs people at random. It prefers opponents you haven't met recently. The only hard block is two accounts in the same browser. Games between accounts that share a device history or an IP are allowed but logged for fair-play review (set `BLOCK_SAME_IP=1` to refuse same-IP pairings).
 
-**Play a Bot.** Hikaru, Magnus and Kasparov. All three are full-strength Stockfish 19 (Skill 20, no strength limit, multiple threads, 0.4 to 2.75 s a move, and a search stops early once it reaches depth 22 (`BOT_STOP_DEPTH`); a position with one legal move is played at once). What differs between them is the opening repertoire, the pace and the presentation. The site calls them bots "built to play in the style of" each player, with a line saying they are not affiliated with or endorsed by the players. 30 minutes a side. Wagers from $1 to $100. A win pays 2x and there is no rake. Bots never offer or accept draws: the engine sees the full move history (so it knows about repetitions), and if its choice would end the game in a draw it searches again over every non-drawing move and plays the best of those unless that leaves it clearly lost. A draw the player forces anyway returns the wager. If the engine fails three times in a row during a game, the game is called off and the wager returned, so a broken engine never hands the player a win on time.
+**Lobby.** Three banners (play, deposit in crypto, fair play), the six queues, a "How it works" strip (deposit, pick a queue, win the pot, with the live rake and fee numbers), and recent results.
 
 **Chat.** Players in a human game can type messages (up to 200 characters, 3 per 5 seconds) or use quick messages. Only the two players receive them. Your messages are green on the right; your opponent's are blue on the left, with a mute toggle.
 
@@ -73,15 +73,9 @@ Real-money wagering is regulated almost everywhere. Get legal advice before you 
 
 Deposit addresses look like `demo-btc-...` on purpose, so nobody can send real coins to one. A "test deposit" walks through confirmations and then credits the balance.
 
+**Visitors.** Admin shows unique visitors today, yesterday and over 7 days: one per browser (device cookie) per UTC day, counted when the page loads its config, so crawlers that don't run scripts and admins are left out. Records (`visits` collection) expire after 90 days.
+
 **Suspension.** A suspended account loses its entire balance, including money in play and pending withdrawals. Nothing is refunded. The suspended user can still sign in, sees a banner telling them to contact support, and can open tickets. Admins can reinstate an account with or without the forfeited balance.
-
-**Beating a bot.** When a player beats a house bot:
-
-1. The win is paid at 2x.
-2. Withdrawals are quietly held.
-3. A suspension is scheduled 2 to 5 hours later (`BOT_WIN_SUSPEND_MIN_MS` / `MAX_MS`). The schedule lives in the database, so it survives a restart.
-
-The Terms and Fair Play pages say this plainly.
 
 ## Fair play (human games)
 
@@ -126,9 +120,8 @@ The quick depth-12 relay plays about as accurately as a very strong human, and t
 server.js            entry point
 src/app.js           Express app, auth, REST API, admin
 src/hub.js           WebSocket fan-out and in-game messages
-src/games.js         live game state, clocks, settlement, bot moves
+src/games.js         live game state, clocks, settlement
 src/matchmaking.js   the six queues
-src/bots.js          bot personas and opening books
 src/engine.js        UCI driver and engine pools
 src/anticheat.js     fair-play model and analysis service
 src/enforcement.js   review, suspension, refunds, scheduled actions
@@ -159,8 +152,7 @@ The server tests check after every scenario that each user's ledger sums to thei
 | `MONGODB_DB` | chessbets | database name |
 | `ADMIN_USERS` | | comma-separated usernames |
 | `ANALYSIS_NODES` | 500000 | per position, fair-play analysis |
-| `ANALYSIS_ENGINES` / `BOT_ENGINES` / `BOT_THREADS` | 2 / 2 / auto | |
-| `BOT_WIN_SUSPEND_MIN_MS` / `MAX_MS` | 2h / 5h | |
+| `ANALYSIS_ENGINES` | 2 | |
 | `BLOCK_SAME_IP` | off | `1` refuses to pair two accounts on one IP |
 | `REGISTER_PER_HOUR` / `LOGIN_PER_MINUTE` | 5 / 12 | per IP |
 | `PAYMENTS` | paper | `crypto` for real payments |

@@ -4,8 +4,6 @@ import assert from 'node:assert/strict';
 
 process.env.FIRST_MOVE_MS = '600';
 process.env.ABANDON_MS_3 = '500';
-process.env.BOT_WIN_SUSPEND_MIN_MS = '50';
-process.env.BOT_WIN_SUSPEND_MAX_MS = '80';
 
 let app;
 before(async () => { app = await boot(); });
@@ -306,66 +304,6 @@ test('with a choice, the matchmaker avoids a repeat opponent', async () => {
   await checkBooks(db());
 });
 
-test('bot game: real engine replies, resigning gives the house the stake', async () => {
-  const a = await player();
-  const r = await a.req('/api/bots/play', { bot: 'hikaru', stake: 700, color: 'w' });
-  assert.equal(r.status, 200);
-  a.send({ t: 'sub', id: r.data.id });
-  const gm = await a.wait((m) => m.t === 'game');
-  assert.equal(gm.game.you, 'w');
-  assert.equal(gm.game.black.bot, 'hikaru');
-  a.send({ t: 'move', id: r.data.id, u: 'a2a3', ply: 0 }); // out of book: engine must answer
-  await a.wait((m) => m.t === 'move' && m.ply === 1);
-  const reply = await a.wait((m) => m.t === 'move' && m.ply === 2, 10_000);
-  assert.match(reply.u, /^[a-h][1-8][a-h][1-8]/);
-  assert.equal((await a.req('/api/bots/play', { bot: 'magnus', stake: 100 })).status, 409);
-  a.send({ t: 'resign', id: r.data.id });
-  await a.wait((m) => m.t === 'end');
-  assert.equal(await a.balance(), 10_000 - 700);
-  assert.ok(await db().ledger.findOne({ user_id: null, kind: 'bot_win', amount: 700 }));
-  await checkBooks(db());
-  a.close();
-});
-
-test('bots never take a draw and re-search when their move would draw', async () => {
-  const a = await player();
-  const r = await a.req('/api/bots/play', { bot: 'magnus', stake: 100, color: 'w' });
-  a.send({ t: 'sub', id: r.data.id });
-  await a.wait((m) => m.t === 'game');
-  const live = app.ctx.games.get(r.data.id);
-  live.moves.push({ u: 'e2e4', s: 'e4' }, { u: 'e7e5', s: 'e5' });
-  a.send({ t: 'draw-offer', id: r.data.id });
-  assert.match((await a.wait((m) => m.t === 'error')).message, /to the end/);
-  assert.equal(live.drawOffer, null);
-  await live.end({ status: 'aborted', reason: 'aborted' });
-
-  // Engine picks a repeating move: the bot must search again without it.
-  const { Chess } = await import('chess.js');
-  const history = ['g1f3', 'g8f6', 'f3g1', 'f6g8', 'g1f3', 'g8f6', 'f3g1'];
-  const c = new Chess();
-  for (const u of history) c.move({ from: u.slice(0, 2), to: u.slice(2, 4) });
-  const { drawingMoves } = await import('../src/bots.js');
-  const drawing = drawingMoves(c);
-  const real = app.ctx.botPool;
-  const calls = [];
-  app.ctx.botPool = {
-    search: async (opts) => {
-      calls.push(opts);
-      return calls.length === 1
-        ? { best: 'f6g8', lines: [{ move: 'f6g8', cp: 0, mate: null }] }
-        : { best: 'e7e5', lines: [{ move: 'e7e5', cp: -15, mate: null }] };
-    },
-  };
-  try {
-    const pick = await app.ctx.games.botMove(history, 1000, drawing, c.moves().length);
-    assert.equal(pick, 'e7e5');
-    assert.deepEqual(calls[0].moves, history);              // full history sent to the engine
-    assert.ok(!calls[1].searchmoves.includes('f6g8'));      // drawing move excluded
-    assert.equal(calls[1].searchmoves.length, c.moves().length - 1);
-  } finally { app.ctx.botPool = real; }
-  a.close();
-});
-
 test('chat: typed messages reach only the opponent, cleaned and rate limited', async () => {
   const a = await player(), b = await player(), c = await player(0);
   const g = await match(a, b, 10, 100);
@@ -389,14 +327,27 @@ test('chat: typed messages reach only the opponent, cleaned and rate limited', a
   const snapC = app.ctx.games.get(g.id).snapshot(c.user.id);
   assert.ok(snapB.chat.length >= 3);
   assert.equal(snapC.chat.length, 0);
-  // No chat in bot games.
   g.white.send({ t: 'resign', id: g.id });
   await a.wait((m) => m.t === 'end' && m.id === g.id);
-  const bot = await a.req('/api/bots/play', { bot: 'hikaru', stake: 100 });
-  a.send({ t: 'chat', id: bot.data.id, text: 'hi bot' });
-  assert.match((await a.wait((m) => m.t === 'error' && /Chat/.test(m.message))).message, /games against people/);
-  await app.ctx.games.get(bot.data.id).end({ status: 'aborted', reason: 'aborted' });
   a.close(); b.close(); c.close();
+});
+
+test('unique visitors: one per browser per day, admins not counted', async () => {
+  const day = new Date().toISOString().slice(0, 10);
+  const before = await db().visits.count({ day });
+  const v = new Client(app.base);
+  await v.req('/api/config');
+  await v.req('/api/config');
+  await sleep(100);
+  assert.equal(await db().visits.count({ day }), before + 1);
+  const admin = await player(0);
+  await db().users.update({ _id: admin.user.id }, { $set: { is_admin: 1 } });
+  await admin.req('/api/config');
+  await sleep(100);
+  assert.equal(await db().visits.count({ day }), before + 2); // counted once as a guest, before the flag
+  const o = (await admin.req('/api/admin/overview')).data;
+  assert.equal(o.visitors.today, before + 2);
+  admin.close();
 });
 
 test('lobby stats: numbers below their minimum are withheld', async () => {
@@ -414,46 +365,10 @@ test('lobby stats: numbers below their minimum are withheld', async () => {
   c.close();
 });
 
-test('bot stake limits', async () => {
-  const a = await player(20_000);
-  assert.equal((await a.req('/api/bots/play', { bot: 'magnus', stake: 50 })).status, 400);
-  assert.equal((await a.req('/api/bots/play', { bot: 'magnus', stake: 10_001 })).status, 400);
-  assert.equal((await a.req('/api/bots/play', { bot: 'nobody', stake: 100 })).status, 400);
-  a.close();
-});
-
-test('bot engine down: no new bot games, and a game in progress is called off with the wager returned', async () => {
-  const a = await player();
-  const real = app.ctx.botPool;
-  try {
-    app.ctx.botPool = { healthy: false, search: async () => { throw new Error('stockfish exited'); } };
-    const r0 = await a.req('/api/bots/play', { bot: 'hikaru', stake: 300, color: 'w' });
-    assert.equal(r0.status, 503);
-    assert.equal(await a.balance(), 10_000);
-
-    // Engine up when the game starts, then it dies.
-    app.ctx.botPool = { healthy: true, search: async () => { throw new Error('stockfish exited'); } };
-    const r = await a.req('/api/bots/play', { bot: 'hikaru', stake: 300, color: 'w' });
-    assert.equal(r.status, 200);
-    a.send({ t: 'sub', id: r.data.id });
-    await a.wait((m) => m.t === 'game');
-    a.send({ t: 'move', id: r.data.id, u: 'a2a3', ply: 0 }); // out of book
-    const end = await a.wait((m) => m.t === 'end', 15_000);
-    assert.equal(end.game.status, 'aborted');
-    assert.equal(end.game.reason, 'bot-unavailable');
-    assert.equal(await a.balance(), 10_000);
-  } finally { app.ctx.botPool = real; }
-  await checkBooks(db());
-  a.close();
-});
-
-test('beating a bot: paid 2x, withdrawals held, suspended hours later, balance forfeited', async () => {
+test('scheduled suspension: withdrawals held under review, then the balance is forfeited', async () => {
   const a = await player(5000);
-  const r = await a.req('/api/bots/play', { bot: 'kasparov', stake: 1000, color: 'w' });
-  const live = app.ctx.games.get(r.data.id);
-  live.moves.push({ u: 'e2e4', s: 'e4', t: 1000 }, { u: 'e7e5', s: 'e5', t: 1000 });
-  await live.end({ result: '1-0', reason: 'checkmate' }); // stand-in for a real win
-  assert.equal(await a.balance(), 5000 - 1000 + 2000);
+  await app.ctx.enforcement.review(a.user.id, 'test');
+  await app.ctx.enforcement.schedule('suspend', a.user.id, 50, { reason: 'Fair play' });
   const u = await db().users.findOne({ _id: a.user.id });
   assert.equal(u.review, 1);
   assert.equal(u.status, 'active');
@@ -469,12 +384,11 @@ test('beating a bot: paid 2x, withdrawals held, suspended hours later, balance f
   const s = await db().users.findOne({ _id: a.user.id });
   assert.equal(s.status, 'suspended');
   assert.equal(s.balance, 0);
-  assert.equal(s.forfeited, 5000);
+  assert.equal(s.forfeited, 4000);
   assert.equal((await db().withdrawals.findOne({ _id: w.data.withdrawal.id })).status, 'rejected');
   await a.wait((m) => m.t === 'suspended');
 
   // Suspended: no games, no money movement, but support still works.
-  assert.equal((await a.req('/api/bots/play', { bot: 'magnus', stake: 100 })).status, 403);
   assert.equal((await a.req('/api/wallet/withdraw', { coin: 'USDT', address: '0x' + 'c'.repeat(40), amount: 500 })).status, 403);
   assert.equal((await a.req('/api/wallet/deposit', { coin: 'USDT', amount: 500 })).status, 403);
   a.send({ t: 'queue-join', tc: 3, stake: 100 });
@@ -542,24 +456,30 @@ test('admin: hidden from players, can reinstate with balance', async () => {
 });
 
 test('restart: unfinished games are voided and every open stake is returned', async () => {
-  const shared = { botPool: app.ctx.botPool, analysisPool: app.ctx.analysisPool };
+  const shared = { analysisPool: app.ctx.analysisPool };
   const one = await boot(shared);
-  const a = new Client(one.base);
-  await a.register('restart_a');
-  await a.fund(1000);
-  await a.connect();
-  a.send({ t: 'queue-join', tc: 3, stake: 500 });
-  await a.wait((m) => m.t === 'queue');
-  const r = await a.req('/api/bots/play', { bot: 'magnus', stake: 300 });
-  assert.equal(r.status, 200);
-  assert.equal(await a.balance(), 1000 - 300); // joining a bot game leaves the queue
-  a.close();
+  const [a, b, c] = [new Client(one.base), new Client(one.base), new Client(one.base)];
+  for (const [cl, name] of [[a, 'restart_a'], [b, 'restart_b'], [c, 'restart_c']]) {
+    await cl.register(name);
+    await cl.fund(1000);
+    await cl.connect();
+  }
+  // a and b are paired into a game; c is left waiting in another queue.
+  a.send({ t: 'queue-join', tc: 3, stake: 100 });
+  await a.wait((m) => m.t === 'queue' && m.state === 'joined');
+  b.send({ t: 'queue-join', tc: 3, stake: 100 });
+  await a.wait((m) => m.t === 'matched');
+  c.send({ t: 'queue-join', tc: 10, stake: 500 });
+  await c.wait((m) => m.t === 'queue' && m.state === 'joined');
+  assert.equal(await a.balance(), 1000 - 100);
+  assert.equal(await c.balance(), 1000 - 500);
+  a.close(); b.close(); c.close();
   await one.close({ crash: true, keep: true }); // a crash: nothing gets to finish
 
   const two = await boot({ ...shared, dbName: one.dbName });
   assert.equal(two.recovered.games, 1);
-  assert.equal(two.recovered.holds, 1);
-  assert.equal((await two.ctx.db.users.findOne({ username: 'restart_a' })).balance, 1000);
+  assert.equal(two.recovered.holds, 3);
+  for (const name of ['restart_a', 'restart_b', 'restart_c']) assert.equal((await two.ctx.db.users.findOne({ username: name })).balance, 1000);
   await checkBooks(two.ctx.db);
   await two.close();
 });

@@ -23,10 +23,11 @@ export default function admin(el, [userId]) {
         <div class="kpi"><span>Player balances</span><b>${money(o.totals.balances)}</b></div>
         <div class="kpi"><span>In play now</span><b>${money(o.totals.held)}</b></div>
         <div class="kpi"><span>Users · games</span><b>${o.totals.users} · ${o.totals.games}</b></div>
+        <div class="kpi" title="One per browser per UTC day. Admins and script-less crawlers aren't counted."><span>Unique visitors today</span><b>${o.visitors.today.toLocaleString('en-US')}</b><span>${o.visitors.yesterday.toLocaleString('en-US')} yesterday · ${o.visitors.week.toLocaleString('en-US')} in 7 days</span></div>
       </div>
       <div class="card card-pad" style="margin-bottom:18px">
         <h3 style="font-size:15px;margin-bottom:8px">Where the house money came from</h3>
-        <table class="table"><tbody>${Object.entries(HOUSE_LABEL).map(([k, label]) => `<tr><td>${label}</td><td class="r num">${house[k]?.n || 0}</td><td class="r num strong">${money(house[k]?.total || 0, { sign: true })}</td></tr>`).join('')}</tbody></table>
+        <table class="table"><tbody>${Object.entries(HOUSE_LABEL).filter(([k]) => !k.startsWith('bot_') || house[k]).map(([k, label]) => `<tr><td>${label}</td><td class="r num">${house[k]?.n || 0}</td><td class="r num strong">${money(house[k]?.total || 0, { sign: true })}</td></tr>`).join('')}</tbody></table>
       </div>
 
       ${pay.mode === 'crypto' ? paymentsHtml(pay) : ''}

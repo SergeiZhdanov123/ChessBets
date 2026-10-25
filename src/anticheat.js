@@ -288,7 +288,7 @@ export class FairPlay {
       s.pending.set(p, job);
     }
     // Live check every few moves once there is something to look at.
-    if (game.kind === 'human' && ply >= 30 && ply % 4 === 0) this.liveCheck(game).catch(() => {});
+    if (ply >= 30 && ply % 4 === 0) this.liveCheck(game).catch(() => {});
   }
 
   async liveCheck(game) {
@@ -339,7 +339,6 @@ export class FairPlay {
         { upsert: true },
       );
       out.push({ userId: side.userId, report });
-      if (game.kind !== 'human') continue; // bot games are handled by the bot-win rule
       const account = accountEvidence(await this.history(side.userId));
       const action = decide(report, account);
       const why = `${describe(report)} Account evidence ${account.evidence} over ${account.games} games.`;

@@ -153,10 +153,18 @@ export const icon = (name, attrs = '') =>
 
 export const knightMark = `<svg viewBox="0 0 32 32" aria-hidden="true"><path fill="#00e701" d="M9 27h13.5l-.9-3.4c2.7-2.6 3.7-5.7 3.7-8.9 0-5-3.8-8.2-8.9-8.2L15 4.8l-1.1 2.4C10.8 8.3 9.2 10.5 8.3 12.8L5 16.3l1.7 2.3 3.6-1c1-.3 2-.1 2.6.4-2 2.4-3.8 5.3-3.9 9Z"/></svg>`;
 
-// Coin glyphs: flat discs with a letter, not brand marks.
-const COIN_COLORS = { BTC: '#f7931a', ETH: '#7b8cde', USDT: '#26a17b', USDC: '#2775ca', SOL: '#9b6dff', LTC: '#a6a9aa', DOGE: '#c2a633', TRX: '#e5312f', BNB: '#e0a90b' };
-export const coinIcon = (code) =>
-  `<svg class="ci" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="10" fill="${COIN_COLORS[code] || '#557086'}"/><text x="10" y="13.6" text-anchor="middle" font-size="${code.length > 3 ? 6.4 : 8}" font-weight="800" fill="#fff" font-family="Figtree, sans-serif">${code === 'BTC' ? '₿' : code === 'ETH' ? 'Ξ' : code[0]}</text></svg>`;
+// Coin glyphs. Bitcoin and Tether use their real marks; the paper-only
+// coins are flat discs with a letter.
+const COIN_LOGOS = {
+  BTC: `<svg class="ci" viewBox="0 0 64 64" aria-hidden="true"><path fill="#f7931a" d="M63.04 39.741c-4.274 17.143-21.638 27.575-38.783 23.301C7.12 58.768-3.313 41.404.962 24.262 5.234 7.117 22.597-3.317 39.737.957c17.144 4.274 27.576 21.64 23.302 38.784z"/><path fill="#fff" d="M46.11 27.441c.636-4.258-2.606-6.547-7.039-8.074l1.438-5.768-3.512-.875-1.4 5.616c-.922-.23-1.87-.447-2.812-.662l1.41-5.653-3.509-.875-1.439 5.766c-.764-.174-1.514-.346-2.242-.527l.004-.018-4.842-1.209-.934 3.75s2.605.597 2.55.634c1.422.355 1.68 1.296 1.636 2.042l-1.638 6.571c.098.025.225.061.365.117l-.37-.092-2.297 9.205c-.174.432-.615 1.08-1.609.834.035.051-2.552-.637-2.552-.637l-1.743 4.019 4.57 1.139c.85.213 1.683.436 2.502.646l-1.453 5.835 3.507.875 1.44-5.772c.957.26 1.887.5 2.797.726L27.504 50.8l3.511.875 1.453-5.823c5.987 1.133 10.49.676 12.383-4.738 1.527-4.36-.075-6.875-3.225-8.516 2.294-.531 4.022-2.04 4.483-5.157zM38.087 38.69c-1.086 4.36-8.426 2.004-10.807 1.412l1.928-7.729c2.38.594 10.011 1.77 8.88 6.317zm1.085-11.312c-.99 3.966-7.1 1.951-9.083 1.457l1.748-7.01c1.983.494 8.367 1.416 7.335 5.553z"/></svg>`,
+  USDT: `<svg class="ci" viewBox="0 0 2000 2000" aria-hidden="true"><path fill="#26a17b" d="M1000 0c552.26 0 1000 447.74 1000 1000s-447.76 1000-1000 1000S0 1552.38 0 1000 447.68 0 1000 0"/><path fill="#fff" d="M1123.42 866.76V718h340.18V491.34H537.28V718H877.5v148.64C601 879.34 393.1 934.1 393.1 999.7s208 120.36 484.4 133.14v476.5h246V1132.8c276-12.74 483.48-67.46 483.48-133s-207.48-120.26-483.48-133m0 225.64v-.12c-6.94.44-42.6 2.58-122 2.58-63.48 0-108.14-1.8-123.88-2.62v.2C633.34 1081.66 451 1039.12 451 988.22S633.36 894.84 877.62 884v166.1c16 1.1 61.76 3.8 124.92 3.8 75.86 0 114-3.16 121-3.8V884c243.8 10.86 425.72 53.44 425.72 104.16s-182 93.32-425.72 104.18"/></svg>`,
+};
+const COIN_COLORS = { ETH: '#7b8cde', USDC: '#2775ca', SOL: '#9b6dff', LTC: '#a6a9aa', DOGE: '#c2a633', TRX: '#e5312f', BNB: '#e0a90b' };
+export const coinIcon = (code) => COIN_LOGOS[code] ||
+  `<svg class="ci" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="10" fill="${COIN_COLORS[code] || '#557086'}"/><text x="10" y="13.6" text-anchor="middle" font-size="${code.length > 3 ? 6.4 : 8}" font-weight="800" fill="#fff" font-family="Figtree, sans-serif">${code === 'ETH' ? 'Ξ' : code[0]}</text></svg>`;
+
+// Queues marked "Most popular" in the lobby and on the play page.
+export const POPULAR = new Set(['3:500', '10:500']);
 
 export const reasonText = (r, result, you) => ({
   checkmate: 'by checkmate', resign: 'by resignation', timeout: 'on time', 'timeout-draw': 'timeout vs insufficient material',

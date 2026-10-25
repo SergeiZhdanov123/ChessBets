@@ -1,10 +1,13 @@
-import { api, esc, money, icon, ago } from '../lib.js';
+import { api, esc, money, icon, ago, coinIcon, POPULAR } from '../lib.js';
 import { store, bus } from '../store.js';
-import { botAvatar } from '../avatars.js';
 
-// Lobby: entry points, live queue counts, the bots, and recent results.
+// Lobby: entry points, the queues, how a game pays, and recent results.
 export default function home(el) {
   const cfg = store.config;
+  const coins = [...new Set(cfg.coins.map((c) => c.label || c.code))];
+  const coinNames = cfg.payments === 'crypto' ? cfg.coins.map((c) => (c.stable ? `${c.label} on ${c.network.replace(/ \(.*\)/, '')}` : c.name)).join(' or ') : 'crypto';
+  const fee = cfg.withdrawFeeBps / 100;
+  const sample = cfg.queues.find((q) => q.key === '10:500') || cfg.queues[0];
   const miniBoard = ['bR', '', 'bB', 'bQ', 'bP', 'bP', '', 'bP', '', 'bN', '', '', '', '', 'wP', 'wN']
     .map((p, i) => `<span class="${(Math.floor(i / 4) + i) % 2 ? 'd' : 'l'}" ${p ? `style="background-image:url(/pieces/${p}.svg)"` : ''}></span>`).join('');
 
@@ -16,11 +19,11 @@ export default function home(el) {
         <span class="btn btn-gray btn-sm">Find a game</span>
         <div class="banner-art mini-board">${miniBoard}</div>
       </a>
-      <a class="banner" href="/bots">
-        <h3>Play a Bot</h3>
-        <p>Thirty minutes against Hikaru, Magnus or Kasparov. Beat one and the house pays double.</p>
-        <span class="btn btn-gray btn-sm">Choose a bot</span>
-        <div class="banner-art faces">${['hikaru', 'magnus', 'kasparov'].map((b) => `<div class="av">${botAvatar(b)}</div>`).join('')}</div>
+      <a class="banner" href="/wallet">
+        <h3>Deposit in crypto</h3>
+        <p>Fund your balance with ${esc(coinNames)}. Withdraw your winnings the same way.</p>
+        <span class="btn btn-gray btn-sm">Open wallet</span>
+        <div class="banner-art coins">${coins.slice(0, 3).map((c) => coinIcon(c)).join('')}</div>
       </a>
       <a class="banner" href="/fair-play">
         <h3>Fair play, checked every move</h3>
@@ -38,13 +41,11 @@ export default function home(el) {
     </section>
 
     <section class="section">
-      <div class="section-head"><h2>${icon('bot')}Play a Bot</h2><a class="btn btn-ghost btn-sm" href="/bots">View all</a></div>
-      <div class="bot-row">
-        ${cfg.bots.map((b) => `
-          <a class="bot-card" href="/bots/${b.id}">
-            <div class="art">${botAvatar(b.id, { wide: true })}</div>
-            <div class="label"><b>${esc(b.name)}</b><span>${esc(b.style)} · 30 min</span></div>
-          </a>`).join('')}
+      <div class="section-head"><h2>${icon('help')}How it works</h2><a class="btn btn-ghost btn-sm" href="/terms">Full rules</a></div>
+      <div class="steps">
+        <div class="step"><span class="step-n">1</span><b>Deposit</b><p>Send ${esc(coinNames)} to your wallet address. It shows up in your balance once the network confirms it.</p></div>
+        <div class="step"><span class="step-n">2</span><b>Pick a queue</b><p>3 or 10 minutes, for ${cfg.queues.filter((q) => q.tc === cfg.queues[0].tc).map((q) => money(q.stake).replace('.00', '')).join(', ').replace(/, ([^,]*)$/, ' or $1')}. You're paired at random with someone on the same queue. No ratings.</p></div>
+        <div class="step"><span class="step-n">3</span><b>Win the pot</b><p>A ${money(sample.stake).replace('.00', '')} game pays the winner ${money(sample.win)} after the ${cfg.rakeBps / 100}% rake. A draw returns ${money(sample.draw)} each. Withdrawals carry a ${fee}% fee.</p></div>
       </div>
     </section>
 
@@ -64,16 +65,13 @@ export default function home(el) {
 
   const qEl = el.querySelector('#queues');
   const paintQueues = () => {
-    qEl.innerHTML = cfg.queues.map((q) => {
-      const n = store.counts?.[q.key] || 0;
-      return `
+    qEl.innerHTML = cfg.queues.map((q) => `
         <a class="qtile" href="/play?tc=${q.tc}&stake=${q.stake}&go=1">
           <div class="qtile-top"><span class="qtile-stake num">${money(q.stake).replace('.00', '')}</span>
             <span class="qtile-tc">${icon(q.tc === 3 ? 'bolt' : 'clock')}${q.tc} min</span></div>
           <div class="qtile-foot"><span>Win <span class="win num">${money(q.win)}</span></span>
-            <span class="waiting ${n ? 'some' : ''}"><i></i>${n} waiting</span></div>
-        </a>`;
-    }).join('');
+            ${POPULAR.has(q.key) ? '<span class="popular">Most popular</span>' : ''}</div>
+        </a>`).join('');
   };
   paintQueues();
 
@@ -81,7 +79,7 @@ export default function home(el) {
   let rows = [];
   const tbody = el.querySelector('#feed');
   const row = (r, fresh) => {
-    const name = r.kind === 'bot' ? `${cfg.bots.find((b) => b.id === r.bot)?.name || 'Bot'} bot` : 'Human';
+    const name = r.kind === 'bot' ? 'House bot' : 'Human';
     const gameIcon = r.kind === 'bot' ? icon('bot') : icon('users');
     const payout = r.outcome === 'win' ? `<span class="green">${money(r.payout)}</span>` : r.outcome === 'draw' ? `<span class="strong">${money(r.payout)}</span>` : `<span>${money(-r.stake)}</span>`;
     return `<tr class="${fresh ? 'new' : ''}">
@@ -100,7 +98,7 @@ export default function home(el) {
     try {
       if (filter === 'mine') {
         const r = await api('/api/my/games');
-        rows = r.games.filter((g) => g.outcome !== 'aborted').slice(0, 20).map((g) => ({ game: g.id, user: store.user.username, kind: g.kind, tc: g.tc, bot: g.bot, stake: g.stake, payout: g.payout, outcome: g.outcome, at: g.at }));
+        rows = r.games.filter((g) => g.outcome !== 'aborted').slice(0, 20).map((g) => ({ game: g.id, user: store.user.username, kind: g.kind, tc: g.tc, stake: g.stake, payout: g.payout, outcome: g.outcome, at: g.at }));
       } else {
         rows = (await api(`/api/feed?f=${filter}`)).rows;
       }
@@ -135,7 +133,6 @@ export default function home(el) {
   const statsTimer = setInterval(loadStats, 15_000);
 
   const offs = [
-    bus.on('store', (p) => { if ('counts' in p) paintQueues(); }),
     bus.on('feed', (m) => {
       const incoming = m.rows.filter((r) => filter === 'all' || (filter === 'high' && r.stake >= 1000) || (filter === 'mine' && r.user === store.user?.username));
       if (!incoming.length) return;

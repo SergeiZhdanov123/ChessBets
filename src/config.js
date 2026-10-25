@@ -1,10 +1,8 @@
 import fs from 'node:fs';
-import os from 'node:os';
 
 const env = process.env;
 const num = (v, d) => (v === undefined || v === '' ? d : Number(v));
 const list = (v) => String(v || '').split(',').map((x) => x.trim().replace(/\/+$/, '')).filter(Boolean);
-const HOUR = 3600_000;
 
 export const config = {
   port: num(env.PORT, 3000),
@@ -29,11 +27,6 @@ export const config = {
   // for fair-play review. Set BLOCK_SAME_IP=1 to refuse those pairings.
   blockSameIpMatch: env.BLOCK_SAME_IP === '1',
 
-  // Bot games.
-  botMinutes: 30,
-  botStakeMin: 100,
-  botStakeMax: 10_000,
-  botMoveScale: num(env.BOT_MOVE_SCALE, 1),     // tests shrink think time
   // Lobby stats strip: a number is only shown once it reaches its minimum,
   // and the strip is hidden while none do. 0 shows it always.
   statsMin: {
@@ -42,21 +35,14 @@ export const config = {
     games24h: num(env.STATS_MIN_GAMES, 25),
     wagered24h: num(env.STATS_MIN_WAGERED_CENTS, 50_000),
   },
-  botStopDepth: num(env.BOT_STOP_DEPTH, 22),    // a bot search ends early at this depth
-  botWinSuspendMinMs: num(env.BOT_WIN_SUSPEND_MIN_MS, 2 * HOUR),
-  botWinSuspendMaxMs: num(env.BOT_WIN_SUSPEND_MAX_MS, 5 * HOUR),
 
   // Abort / abandonment.
   firstMoveMs: num(env.FIRST_MOVE_MS, 30_000),
-  botFirstMoveMs: num(env.BOT_FIRST_MOVE_MS, 60_000),
-  abandonMs: { 3: num(env.ABANDON_MS_3, 30_000), 10: num(env.ABANDON_MS_10, 60_000), 30: num(env.ABANDON_MS_30, 90_000) },
+  abandonMs: { 3: num(env.ABANDON_MS_3, 30_000), 10: num(env.ABANDON_MS_10, 60_000) },
 
-  // Stockfish.
+  // Stockfish, for fair-play analysis.
   // bin/stockfish is what `npm install` downloads where none is installed.
   stockfishPath: env.STOCKFISH_PATH || (fs.existsSync(new URL('../bin/stockfish', import.meta.url)) ? new URL('../bin/stockfish', import.meta.url).pathname : 'stockfish'),
-  botEngines: num(env.BOT_ENGINES, 2),
-  botThreads: num(env.BOT_THREADS, Math.max(1, Math.min(4, Math.floor((os.cpus().length - 2) / 2)))),
-  botHashMb: num(env.BOT_HASH_MB, 256),
   analysisEngines: num(env.ANALYSIS_ENGINES, 2),
   analysisNodes: num(env.ANALYSIS_NODES, 500_000),
 

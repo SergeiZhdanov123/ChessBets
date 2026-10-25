@@ -3,7 +3,7 @@ import { esc, money, icon, clock, reasonText, confirmBox, toast } from '../lib.j
 import { store, bus, ws, refreshMe } from '../store.js';
 import { Board } from '../board.js';
 import { sound } from '../sound.js';
-import { botAvatar, userAvatar } from '../avatars.js';
+import { userAvatar } from '../avatars.js';
 
 const VALUES = { p: 1, n: 3, b: 3, r: 5, q: 9 };
 const START = { p: 8, n: 2, b: 2, r: 2, q: 1 };
@@ -207,8 +207,8 @@ export default function gameView(el, [id]) {
 
   function sideInfo(color) {
     const s = color === 'w' ? g.white : g.black;
-    const av = s.bot ? botAvatar(s.bot) : userAvatar(s.name || '?');
-    return { name: s.bot ? s.name : s.name || 'Player', sub: s.bot ? 'Bot' : color === you() ? 'You' : '', av, bot: !!s.bot };
+    // s.bot only appears on old games against the retired house bots.
+    return { name: s.name || 'Player', sub: s.bot ? 'Bot' : color === you() ? 'You' : '', av: userAvatar(s.name || '?') };
   }
 
   function material(color) {
@@ -234,13 +234,12 @@ export default function gameView(el, [id]) {
     for (const [elBar, color] of [[topBar, top], [botBar, bottom]]) {
       const s = sideInfo(color);
       const gone = g.gone?.[color];
-      const thinking = active() && s.bot && chess.turn() === color && viewPly === chess.history().length;
       elBar.innerHTML = `
         <div class="who">
           <div class="av">${s.av}</div>
           <div style="min-width:0">
             <div class="name">${esc(s.name)}</div>
-            <div class="sub">${gone ? `<span class="gone-note" data-gone="${gone}">Disconnected</span>` : thinking ? 'Thinking...' : esc(s.sub)}</div>
+            <div class="sub">${gone ? `<span class="gone-note" data-gone="${gone}">Disconnected</span>` : esc(s.sub)}</div>
           </div>
           <div class="material">${material(color)}</div>
         </div>
@@ -291,13 +290,12 @@ export default function gameView(el, [id]) {
       return 'Waiting for the first move';
     }
     if (!you()) return `${chess.turn() === 'w' ? 'White' : 'Black'} to move`;
-    return chess.turn() === you() ? 'Your move' : `${g.kind === 'bot' ? 'Bot' : 'Opponent'} to move`;
+    return chess.turn() === you() ? 'Your move' : 'Opponent to move';
   }
 
   function paintPanel() {
     if (!g) return;
-    const isBot = g.kind === 'bot';
-    const botName = isBot ? (g.white.bot ? g.white.name : g.black.name) : '';
+    const isBot = g.kind === 'bot'; // an old game against a retired house bot
     const n = g.moves.length;
     const mine = you();
     let actions = '';
@@ -307,14 +305,14 @@ export default function gameView(el, [id]) {
         <div class="act-row">
           ${canAbort
             ? `<button class="btn btn-gray" data-a="abort">${icon('x')}Abort</button>`
-            : isBot ? '' : `<button class="btn btn-gray" data-a="draw" ${g.drawOffer === mine ? 'disabled' : ''}>${icon('hand')}${g.drawOffer === mine ? 'Offered' : 'Offer draw'}</button>`}
-          <button class="btn btn-gray" data-a="resign" ${canAbort ? 'disabled' : ''} ${isBot && !canAbort ? 'style="grid-column:1/-1"' : ''}>${icon('flag')}Resign</button>
+            : `<button class="btn btn-gray" data-a="draw" ${g.drawOffer === mine ? 'disabled' : ''}>${icon('hand')}${g.drawOffer === mine ? 'Offered' : 'Offer draw'}</button>`}
+          <button class="btn btn-gray" data-a="resign" ${canAbort ? 'disabled' : ''}>${icon('flag')}Resign</button>
         </div>`;
     } else if (!active()) {
       actions = `<div class="act-row">${again()}<a class="btn btn-gray" href="/">Lobby</a></div>`;
     }
     const offer = active() && mine && g.drawOffer && g.drawOffer !== mine
-      ? `<div class="offer"><span>${isBot ? 'Draw offered' : 'Your opponent offers a draw'}</span><button class="btn btn-green btn-sm" data-a="accept">Accept</button><button class="btn btn-gray btn-sm" data-a="decline">Decline</button></div>` : '';
+      ? `<div class="offer"><span>Your opponent offers a draw</span><button class="btn btn-green btn-sm" data-a="accept">Accept</button><button class="btn btn-gray btn-sm" data-a="decline">Decline</button></div>` : '';
 
     // The panel has a part that repaints on every move and a chat block that
     // is built once, so a half-typed message survives incoming moves.
@@ -323,7 +321,7 @@ export default function gameView(el, [id]) {
     if (!isBot && mine) buildChat();
     main.innerHTML = `
       <div class="gp-head">
-        <span class="t">${icon(isBot ? 'bot' : 'users')}${isBot ? `${esc(botName)} · ${g.tc} min` : `Human · ${g.tc} min`}</span>
+        <span class="t">${icon(isBot ? 'bot' : 'users')}${isBot ? 'House bot' : 'Human'} · ${g.tc} min</span>
         <span class="dim" style="font-weight:600;font-size:12.5px">${active() ? 'Live' : 'Finished'}</span>
       </div>
       <div class="gp-pot">
@@ -382,10 +380,7 @@ export default function gameView(el, [id]) {
   }
 
   function again() {
-    if (g.kind === 'bot') {
-      const b = g.white.bot || g.black.bot;
-      return `<a class="btn btn-green" href="/bots/${b}">Play again</a>`;
-    }
+    if (g.kind === 'bot') return '<a class="btn btn-green" href="/play">Play a human</a>';
     return `<a class="btn btn-green" href="/play?tc=${g.tc}&stake=${g.stake}&go=1">New game</a>`;
   }
 

@@ -22,9 +22,9 @@ if (recovered.games || recovered.holds) {
   console.log(`Recovered after restart: voided ${recovered.games} unfinished game(s), returned ${recovered.holds} open stake(s).`);
 }
 
-ctx.botPool.whenReady(20_000).then((ok) => {
+ctx.analysisPool.whenReady(20_000).then((ok) => {
   if (ok) console.log(`Stockfish ready (${config.stockfishPath})`);
-  else console.error(`Stockfish did not start from "${config.stockfishPath}". Bot games are refused until it does. Run npm install, or set STOCKFISH_PATH.`);
+  else console.error(`Stockfish did not start from "${config.stockfishPath}". Fair-play analysis is off until it does. Run npm install, or set STOCKFISH_PATH.`);
 });
 
 server.on('error', (err) => {

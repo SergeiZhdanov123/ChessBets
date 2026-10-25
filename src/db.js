@@ -33,6 +33,8 @@ const INDEXES = {
   // staff approve them.
   refunds: [[{ ref: 1 }, { unique: true }], [{ status: 1, created_at: -1 }], [{ user_id: 1 }]],
   tickets: [[{ user_id: 1, updated_at: -1 }], [{ status: 1, updated_at: -1 }]],
+  // One document per browser per UTC day (_id day:device); kept 90 days.
+  visits: [[{ day: 1, device: 1 }], [{ at: 1 }, { expireAfterSeconds: 90 * 86_400 }]],
   counters: [],
 };
 export const COLLECTIONS = Object.keys(INDEXES);

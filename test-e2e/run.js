@@ -19,7 +19,7 @@ const server = spawn(process.execPath, ['server.js'], {
   cwd: root,
   env: {
     ...process.env, PORT: String(port), HOST: '127.0.0.1', MONGODB_URI: mongoUri, MONGODB_DB: testDbName('e2e'), ADMIN_USERS: 'e2eadmin', PAYMENTS: 'paper',
-    DEPOSIT_CONFIRM_MS: '150', WITHDRAW_PROCESS_MS: '200', BOT_MOVE_SCALE: '0.2', REGISTER_PER_HOUR: '1000', ANALYSIS_NODES: '50000',
+    DEPOSIT_CONFIRM_MS: '150', WITHDRAW_PROCESS_MS: '200', REGISTER_PER_HOUR: '1000', ANALYSIS_NODES: '50000',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -86,14 +86,16 @@ async function check(name, fn) {
 
 const money = (p) => p.locator('#balAmt').textContent();
 
-await check('lobby renders queues, bots and footer for guests', async () => {
+await check('lobby renders queues, how-it-works and footer for guests', async () => {
   const ctx = await browser.newContext();
   const page = await ctx.newPage();
   page.on('pageerror', (e) => errors.push(`guest: ${e.message}`));
   await page.goto(base + '/');
   await page.waitForSelector('.qtile');
   assert.equal(await page.locator('.qtile').count(), 6);
-  assert.equal(await page.locator('.bot-card').count(), 3);
+  assert.equal(await page.locator('.qtile .popular').count(), 2);
+  assert.equal(await page.locator('.qtile .waiting').count(), 0);
+  assert.equal(await page.locator('.step').count(), 3);
   assert.match(await page.locator('.footer').textContent(), /paper money/i);
   await page.click('.qtile >> nth=0');
   await page.waitForURL(/\/play/);
@@ -102,28 +104,7 @@ await check('lobby renders queues, bots and footer for guests', async () => {
   await ctx.close();
 });
 
-const alice = await newUser('alice_e2e', { fund: 20_000 });
-
-await check('bot game: drag a move, the bot replies, resign settles', async () => {
-  await alice.goto(base + '/bots/magnus');
-  await alice.click('[data-color=w]');
-  await alice.fill('#bamt', '7.00');
-  await alice.click('[data-act=play]');
-  await alice.waitForURL(/\/game\//);
-  await alice.waitForSelector('#moves');
-  await move(alice, 'e2', 'e4', true);
-  await alice.waitForFunction(() => document.querySelectorAll('#moves button').length >= 2, null, { timeout: 15_000 });
-  await move(alice, 'g1', 'f3');
-  await alice.waitForFunction(() => document.querySelectorAll('#moves button').length >= 4, null, { timeout: 15_000 });
-  assert.equal(await money(alice), '$193.00');
-  assert.equal(await alice.locator('[data-a=draw]').count(), 0, 'no draw button against a bot');
-  assert.equal(await alice.locator('.chat').count(), 0, 'no chat against a bot');
-  await alice.click('[data-a=resign]');
-  await alice.click('[data-yes]');
-  await alice.waitForSelector('.result');
-  assert.match(await alice.locator('.result h3').textContent(), /You lost/);
-  assert.equal(await money(alice), '$193.00');
-});
+const alice = await newUser('alice_e2e', { fund: 19_300 });
 
 const bob = await newUser('bob_e2e', { fund: 5_000 });
 
@@ -202,7 +183,7 @@ await check('suspension: banner, no refund message, play blocked, support reacha
 
 await check('mobile: no horizontal scroll, board fits, bottom nav present', async () => {
   const m = await newUser('mobile_e2e', { viewport: { width: 390, height: 844 } });
-  for (const p of ['/', '/play', '/bots', '/fair-play', '/terms']) {
+  for (const p of ['/', '/play', '/fair-play', '/terms']) {
     await m.goto(base + p);
     await m.waitForTimeout(250);
     const over = await m.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);

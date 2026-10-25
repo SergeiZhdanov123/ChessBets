@@ -14,7 +14,6 @@ import { createEnforcement } from './enforcement.js';
 import { createWallet } from './wallet.js';
 import { btcWallet, tronAddressOk } from './chain.js';
 import { FairPlay, MODEL, accountEvidence } from './anticheat.js';
-import { botList, BOTS } from './bots.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -105,7 +104,7 @@ export async function createApp(opts = {}) {
     p.then(() => pending.delete(p), () => pending.delete(p));
     return p;
   };
-  // One stake-taking action per user at a time (queue joins, bot games).
+  // One stake-taking action per user at a time (queue joins, deposit addresses).
   const locks = new Map();
   ctx.userLock = (userId, fn) => {
     const run = (locks.get(userId) || Promise.resolve()).then(fn);
@@ -117,7 +116,6 @@ export async function createApp(opts = {}) {
 
   ctx.money = createMoney(db);
   ctx.hub = createHub(ctx);
-  ctx.botPool = opts.botPool || new EnginePool(config.botEngines, config.stockfishPath, { Threads: config.botThreads, Hash: config.botHashMb });
   ctx.analysisPool = opts.analysisPool || new EnginePool(config.analysisEngines, config.stockfishPath, { Threads: 1, Hash: 32 });
   ctx.games = createGames(ctx);
   ctx.matchmaker = createMatchmaker(ctx);
@@ -149,7 +147,7 @@ export async function createApp(opts = {}) {
     return db.users.findOne({ _id: s.userId });
   }
 
-  const gameRowFields = { moves: 1, fen: 1, kind: 1, tc: 1, stake: 1, bot: 1, status: 1, result: 1, reason: 1, white_id: 1, black_id: 1, white_name: 1, black_name: 1, rake: 1, payout_white: 1, payout_black: 1, created_at: 1, ended_at: 1 };
+  const gameRowFields = { moves: 1, fen: 1, kind: 1, tc: 1, stake: 1, status: 1, result: 1, reason: 1, white_id: 1, black_id: 1, white_name: 1, black_name: 1, rake: 1, payout_white: 1, payout_black: 1, created_at: 1, ended_at: 1 };
 
   const api = (ctx.api = {
     async authFromRequest(req) {
@@ -172,7 +170,8 @@ export async function createApp(opts = {}) {
       const moves = r.moves || [];
       const side = (c) => {
         const uid = c === 'w' ? r.white_id : r.black_id;
-        if (!uid && r.bot) return { bot: r.bot, name: BOTS[r.bot]?.name, fullName: BOTS[r.bot]?.fullName };
+        // Games against the old house bots have no user on the bot's side.
+        if (!uid) return { bot: true, name: 'House bot' };
         return { userId: uid, name: c === 'w' ? r.white_name : r.black_name };
       };
       const you = viewerId && r.white_id === viewerId ? 'w' : viewerId && r.black_id === viewerId ? 'b' : null;
@@ -318,15 +317,28 @@ export async function createApp(opts = {}) {
     res.json({ user: await publicUser(req.user), activeGame: g?.id || null, queue: req.user ? ctx.matchmaker.status(req.user.id) : null });
   }));
 
+  // Every page load fetches /api/config, so this is where a visit is
+  // counted: one per browser (device cookie) per UTC day. Crawlers that
+  // don't run scripts never get here, and admins aren't counted.
+  const visitsSeen = new Set();
+  function countVisit(req) {
+    if (!req.device || req.user?.is_admin) return;
+    const day = new Date().toISOString().slice(0, 10);
+    const key = `${day}:${req.device}`;
+    if (visitsSeen.has(key)) return;
+    if (visitsSeen.size > 50_000) visitsSeen.clear();
+    visitsSeen.add(key);
+    db.visits.update({ _id: key }, { $setOnInsert: { day, device: req.device, user_id: req.user?.id ?? null, at: new Date() } }, { upsert: true })
+      .catch((e) => console.error('visit', e.message));
+  }
+
   app.get('/api/config', (req, res) => {
+    countVisit(req);
     res.json({
       queues: config.timeControls.flatMap((tc) => config.stakes.map((stake) => ({ key: `${tc}:${stake}`, tc, stake, ...humanPayouts(stake) }))),
       rakeBps: config.rakeBps,
       withdrawFeeBps: config.withdrawFeeBps,
       minWithdraw: config.minWithdraw,
-      bots: botList(),
-      botsOnline: ctx.botPool.healthy,
-      bot: { minutes: config.botMinutes, min: config.botStakeMin, max: config.botStakeMax },
       coins: ctx.wallet.coins(),
       payments: config.payments,
       chat: CHAT_PRESETS,
@@ -335,26 +347,6 @@ export async function createApp(opts = {}) {
   });
 
   // ---- games ----
-  app.post('/api/bots/play', needUser, needActive, wrap(async (req, res) => {
-    const { bot, stake, color } = req.body || {};
-    const cents = Math.round(Number(stake));
-    if (!BOTS[bot]) return res.status(400).json({ error: 'Pick a bot' });
-    if (!Number.isInteger(cents) || cents < config.botStakeMin || cents > config.botStakeMax) return res.status(400).json({ error: 'Wager must be between $1 and $100' });
-    const g = await ctx.userLock(req.user.id, async () => {
-      const busy = ctx.games.activeFor(req.user.id);
-      if (busy) throw Object.assign(new Error('Finish your current game first'), { status: 409, game: busy.id });
-      if (ctx.matchmaker.status(req.user.id)) await ctx.matchmaker.leave(req.user.id, 'bot-game');
-      return ctx.games.createBot(req.user, bot, cents, color, { ip: req.ip2, device: req.device });
-    }).catch((e) => {
-      if (e.status === 409) { res.status(409).json({ error: e.message, game: e.game }); return null; }
-      if (e.status === 503) { res.status(503).json({ error: e.message }); return null; }
-      throw e;
-    });
-    if (!g) return;
-    ctx.hub.pushBalance(req.user.id);
-    res.json({ id: g.id });
-  }));
-
   app.get('/api/games/:id', wrap(async (req, res) => {
     const g = ctx.games.get(req.params.id);
     if (g) {
@@ -376,25 +368,25 @@ export async function createApp(opts = {}) {
     res.json({
       games: rows.map((r) => {
         const color = r.white_id === me ? 'w' : 'b';
-        const opp = r.kind === 'bot' ? BOTS[r.bot]?.name : color === 'w' ? r.black_name : r.white_name;
+        const opp = r.kind === 'bot' ? 'House bot' : color === 'w' ? r.black_name : r.white_name;
         const payout = color === 'w' ? r.payout_white : r.payout_black;
         const outcome = r.status === 'aborted' ? 'aborted' : r.result === '1/2-1/2' ? 'draw' : (r.result === '1-0') === (color === 'w') ? 'win' : 'loss';
-        return { id: r.id, kind: r.kind, tc: r.tc, stake: r.stake, color, opponent: opp, bot: r.bot, outcome, reason: r.reason, payout, plies: r.ply ?? 0, at: r.ended_at || r.created_at };
+        return { id: r.id, kind: r.kind, tc: r.tc, stake: r.stake, color, opponent: opp, outcome, reason: r.reason, payout, plies: r.ply ?? 0, at: r.ended_at || r.created_at };
       }),
     });
   }));
 
   app.get('/api/feed', wrap(async (req, res) => {
-    const filter = { status: 'finished', ...(req.query.f === 'high' ? { stake: { $gte: 1000 } } : {}) };
+    const filter = { kind: 'human', status: 'finished', ...(req.query.f === 'high' ? { stake: { $gte: 1000 } } : {}) };
     const rows = await db.games.find(filter, { projection: { moves: 0, fen: 0 }, sort: { ended_at: -1 }, limit: 20 });
     res.json({ rows: rows.flatMap(feedShape).slice(0, 20) });
   }));
 
   app.get('/api/stats', wrap(async (req, res) => {
-    const recent = { status: 'finished', ended_at: { $gt: Date.now() - 86_400_000 } };
+    const recent = { kind: 'human', status: 'finished', ended_at: { $gt: Date.now() - 86_400_000 } };
     const [games24h, wagered24h] = await Promise.all([
       db.games.count(recent),
-      db.games.sum({ $cond: [{ $eq: ['$kind', 'human'] }, { $multiply: ['$stake', 2] }, '$stake'] }, recent),
+      db.games.sum({ $multiply: ['$stake', 2] }, recent),
     ]);
     const stats = {
       online: ctx.hub.online(),
@@ -489,17 +481,21 @@ export async function createApp(opts = {}) {
     const names = new Map((await db.users.find({ _id: { $in: pending.map((a) => a.user_id) } }, { projection: { username: 1 } })).map((u) => [u.id, u.username]));
     for (const a of pending) a.username = names.get(a.user_id) || null;
 
-    const [users, balances, held, games, openTickets] = await Promise.all([
+    const dayAgo = (n) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
+    const [users, balances, held, games, openTickets, visitorsToday, visitorsYesterday, visitors7d] = await Promise.all([
       db.users.count(),
       db.users.sum('$balance'),
       db.holds.sum('$amount', { status: 'held' }),
       db.games.count({ status: 'finished' }),
       db.tickets.count({ status: 'open' }),
+      db.visits.count({ day: dayAgo(0) }),
+      db.visits.count({ day: dayAgo(1) }),
+      db.visits.aggregate([{ $match: { day: { $gte: dayAgo(6) } } }, { $group: { _id: '$device' } }, { $count: 'n' }]).then((r) => r[0]?.n ?? 0),
     ]);
     const refunds = await db.refunds.find({ status: 'pending' }, { sort: { created_at: 1 }, limit: 200 });
     const who = new Map((await db.users.find({ _id: { $in: [...new Set(refunds.flatMap((r) => [r.user_id, r.cheater_id]))] } }, { projection: { username: 1 } })).map((u) => [u.id, u.username]));
     for (const r of refunds) { r.username = who.get(r.user_id) || null; r.cheater = who.get(r.cheater_id) || null; }
-    res.json({ house, flagged, pending, refunds, totals: { users, balances, held, games, openTickets }, model: MODEL });
+    res.json({ house, flagged, pending, refunds, totals: { users, balances, held, games, openTickets }, visitors: { today: visitorsToday, yesterday: visitorsYesterday, week: visitors7d }, model: MODEL });
   }));
   app.get('/api/admin/users', needUser, needAdmin, wrap(async (req, res) => {
     const q = String(req.query.q || '').toLowerCase().slice(0, 32);
@@ -610,6 +606,8 @@ export async function createApp(opts = {}) {
     res.type('application/javascript').sendFile(path.join(ROOT, 'node_modules/chess.js/dist/esm/chess.js'));
   });
   app.use(express.static(path.join(ROOT, 'public'), { index: false, maxAge: config.prod ? '1h' : 0 }));
+  // The house bots are gone; old links land on the lobby.
+  app.get(/^\/bots(\/.*)?$/, (req, res) => res.redirect(301, '/'));
   app.get(/^\/(?!api|ws|vendor).*/, (req, res) => res.sendFile(path.join(ROOT, 'public/index.html')));
 
   const server = http.createServer(app);
@@ -626,7 +624,6 @@ export async function createApp(opts = {}) {
     ctx.games.shutdown();
     ctx.hub.close?.();
     await new Promise((r) => server.close(() => r()));
-    if (!opts.botPool) ctx.botPool.quit();
     if (!opts.analysisPool) ctx.analysisPool.quit();
     if (!crash) {
       const deadline = Date.now() + 15_000;

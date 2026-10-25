@@ -41,7 +41,7 @@ function fairPlay() {
   </article>`;
 }
 
-const UPDATED = 'October 24, 2026';
+const UPDATED = 'October 25, 2026';
 
 function terms() {
   const cfg = store.config;
@@ -51,7 +51,7 @@ function terms() {
   return `
   <article class="prose legal">
     <h1>Terms of Service</h1>
-    <p class="lede">Last updated ${UPDATED}. These Terms are a binding agreement between you and ChessBets ("ChessBets", "we", "us"). Please read them in full. <b>Section 14 requires disputes to be resolved by individual arbitration and waives class actions and jury trials.</b></p>
+    <p class="lede">Last updated ${UPDATED}. These Terms are a binding agreement between you and ChessBets ("ChessBets", "we", "us"). Please read them in full. <b>Section 13 requires disputes to be resolved by individual arbitration and waives class actions and jury trials.</b></p>
 
     <h2>1. Accepting these Terms</h2>
     <p>By creating an account, depositing, playing or otherwise using the site, you agree to these Terms, the <a href="/privacy">Privacy Policy</a> and the <a href="/fair-play">Fair Play rules</a>, which form part of these Terms. If you do not agree, do not use ChessBets. We may change these Terms at any time by posting a new version here; the date above shows when they last changed. Continuing to use the site after a change means you accept it.</p>
@@ -82,16 +82,7 @@ function terms() {
       <li>You can chat with your opponent during and after the game. Only the two of you see it, and you can mute your opponent at any time. Keep it civil.</li>
     </ul>
 
-    <h2>5. Bot games</h2>
-    <ul>
-      <li>Bot games are ${cfg.bot.minutes} minutes per side against the house, for wagers from ${'$'}${cfg.bot.min / 100} to ${'$'}${cfg.bot.max / 100}. A win pays double your wager and no rake is taken.</li>
-      <li><b>The bots are computer programs running a chess engine at full strength.</b> They are not people. Their names, pictures and descriptions refer to a style of play only. The players they are named after have no connection to ChessBets and do not endorse it.</li>
-      <li>Bots never offer or accept a draw and avoid drawn positions. If a game is drawn anyway, your wager is returned.</li>
-      <li><b>No human can beat the bots over ${cfg.bot.minutes} minutes without outside help. A win against a bot is therefore treated as cheating:</b> withdrawals are held at once, and the account is suspended a few hours after the game under Section 7, with the whole balance forfeited.</li>
-      <li>If a bot cannot move because of a technical fault, the game is called off and your wager is returned. That is the only remedy for a bot fault.</li>
-    </ul>
-
-    <h2>6. Deposits, balances and withdrawals</h2>
+    <h2>5. Deposits, balances and withdrawals</h2>
     ${live ? `<ul>
       <li>We accept cryptocurrency only: ${cfg.coins.map((c) => esc(c.stable ? `${c.label} on ${c.network}` : c.name)).join(' and ')}. We never accept cash, cards or bank transfers.</li>
       <li>Bitcoin sent to your deposit address is credited in US dollars at the bitcoin price when it reaches the required confirmations. USDT is requested for a dollar amount and must be sent as the exact amount shown, on the Tron network; the amount is how it is matched to your account.</li>
@@ -106,7 +97,7 @@ function terms() {
       <li>You are responsible for any taxes on your winnings.</li>
     </ul>
 
-    <h2>7. Fair play, suspension and forfeiture</h2>
+    <h2>6. Fair play, suspension and forfeiture</h2>
     <p>Using an engine, another person or any other outside help during a game is cheating. So is arranging results, playing against yourself, sharing accounts, or exploiting a bug. The <a href="/fair-play">Fair Play page</a> explains how we detect it.</p>
     <ul>
       <li>Whether an account has cheated is decided by us, using our own systems and judgment. Our decision is final, and we do not have to disclose the evidence or methods behind it.</li>
@@ -115,7 +106,7 @@ function terms() {
       <li>If you believe a suspension is a mistake, <a href="/support">contact support</a>. We read every appeal, but we are not required to reverse a decision.</li>
     </ul>
 
-    <h2>8. Things you must not do</h2>
+    <h2>7. Things you must not do</h2>
     <ul>
       <li>Break the law, or use ChessBets for money laundering, fraud or the proceeds of crime.</li>
       <li>Use bots, scripts, scrapers or automation, or interfere with, overload or try to get around the site's security or limits.</li>
@@ -123,27 +114,27 @@ function terms() {
       <li>Open chargebacks, disputes or claims against payments you made, or make claims you know are false.</li>
     </ul>
 
-    <h2>9. Faults, interruptions and voided games</h2>
+    <h2>8. Faults, interruptions and voided games</h2>
     <ul>
       <li>The site may be slow, interrupted or unavailable, and may lose a game in progress. If the server restarts, unfinished games are voided and open wagers are returned. That is the only remedy for an interruption.</li>
       <li>If a game, payout or balance is affected by a bug, error or malfunction, we may void it and correct balances. Results and balances in our records are final and take priority over anything shown on your screen.</li>
     </ul>
 
-    <h2>10. Closing accounts</h2>
-    <p>You can stop using ChessBets at any time and ask support to close your account. We may suspend, restrict or close any account at any time, for any reason or no reason, with or without notice. If we close an account for a reason other than a breach of these Terms, we will return the remaining balance, minus the withdrawal fee, after any checks we need to make. If we close it for a breach, Section 7 applies.</p>
+    <h2>9. Closing accounts</h2>
+    <p>You can stop using ChessBets at any time and ask support to close your account. We may suspend, restrict or close any account at any time, for any reason or no reason, with or without notice. If we close an account for a reason other than a breach of these Terms, we will return the remaining balance, minus the withdrawal fee, after any checks we need to make. If we close it for a breach, Section 6 applies.</p>
 
-    <h2>11. Our content</h2>
+    <h2>10. Our content</h2>
     <p>The site, its software, design, text and graphics belong to ChessBets or its licensors. You may use the site for your own personal play only. Chess moves are not owned by anyone, but you may not copy or resell the site or its data.</p>
 
-    <h2>12. No warranties</h2>
+    <h2>11. No warranties</h2>
     <p class="caps">ChessBets is provided "as is" and "as available". To the fullest extent the law allows, we disclaim all warranties, express or implied, including merchantability, fitness for a particular purpose, title, non-infringement, accuracy and uninterrupted or error-free service. We do not warrant that the site is secure, free of viruses, or lawful where you are. You use it at your own risk, and you understand that you can lose money.</p>
 
-    <h2>13. Limit of our liability</h2>
+    <h2>12. Limit of our liability</h2>
     <p class="caps">To the fullest extent the law allows, ChessBets and its owners, staff, contractors and suppliers will not be liable for any indirect, incidental, special, consequential, exemplary or punitive damages, or for any loss of profits, winnings, revenue, data, cryptocurrency or goodwill, however caused and on any theory of liability, even if we were told they were possible. Our total liability for all claims relating to ChessBets is limited to the greater of (a) the fees and rake you paid us in the six months before the claim arose, and (b) fifty US dollars.</p>
     <p>Some places do not allow some of these limits. Where that is the case, they apply only as far as the law allows. Nothing in these Terms limits liability that cannot be limited by law.</p>
     <p>You agree to defend, indemnify and hold harmless ChessBets and its owners, staff and contractors from any claim, loss, liability or cost (including reasonable legal fees) arising from your use of the site, your breach of these Terms, or your breach of any law or the rights of anyone else.</p>
 
-    <h2>14. Disputes and arbitration</h2>
+    <h2>13. Disputes and arbitration</h2>
     <ul>
       <li><b>Talk to us first.</b> Before bringing any claim, open a support ticket describing it and give us 30 days to try to resolve it.</li>
       <li><b>Arbitration.</b> Any dispute that is not resolved will be settled by binding individual arbitration administered by the American Arbitration Association under its Consumer Arbitration Rules, not in court. Either of us may instead bring an individual claim in small claims court.</li>
@@ -153,11 +144,11 @@ function terms() {
       <li>These Terms are governed by the laws of the State of Delaware, United States, without regard to its conflict of laws rules, and by the Federal Arbitration Act.</li>
     </ul>
 
-    <h2>15. Playing responsibly</h2>
+    <h2>14. Playing responsibly</h2>
     <p>Only wager money you can afford to lose. If you want a break or want your account closed for good, <a href="/support">contact support</a> and we will close it. If gambling is causing you problems, help is available from organisations such as the National Council on Problem Gambling (1-800-GAMBLER in the US).</p>
 
-    <h2>16. General</h2>
-    <p>These Terms, the Privacy Policy and the Fair Play rules are the whole agreement between you and us about ChessBets. If any part is found unenforceable, the rest stays in effect. If we do not enforce a right, we have not given it up. You may not transfer your rights under these Terms; we may transfer ours. Sections 6 to 9 and 11 to 16 survive the end of your account. Questions go to <a href="/support">support</a>.</p>
+    <h2>15. General</h2>
+    <p>These Terms, the Privacy Policy and the Fair Play rules are the whole agreement between you and us about ChessBets. If any part is found unenforceable, the rest stays in effect. If we do not enforce a right, we have not given it up. You may not transfer your rights under these Terms; we may transfer ours. Sections 5 to 8 and 10 to 15 survive the end of your account. Questions go to <a href="/support">support</a>.</p>
   </article>`;
 }
 
@@ -187,7 +178,7 @@ function privacy() {
     <p>We do not sell your information, and we do not use it for advertising.</p>
 
     <h2>Cookies and browser storage</h2>
-    <p>We use two cookies, both required for the site to work: a session cookie that keeps you signed in for up to 30 days, and a device cookie that links accounts used in the same browser (kept for up to two years). The site also saves a few display settings, like sound on or off, in your browser. There are no advertising or analytics cookies.</p>
+    <p>We use two cookies, both required for the site to work: a session cookie that keeps you signed in for up to 30 days, and a device cookie that links accounts used in the same browser (kept for up to two years). The device cookie is also how we count unique visitors per day; those daily records are deleted after 90 days. The site also saves a few display settings, like sound on or off, in your browser. There are no advertising or analytics cookies.</p>
 
     <h2>Who we share it with</h2>
     <ul>

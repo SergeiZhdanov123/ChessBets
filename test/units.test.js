@@ -1,10 +1,8 @@
 import './helpers.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Chess } from 'chess.js';
 import { humanPayouts, rakeOf, withdrawFeeOf, fmt } from '../src/money.js';
 import { binomTail, fisherCombine, winPct, moveAccuracy, scorePlayer, accountEvidence, decide, MODEL } from '../src/anticheat.js';
-import { BOTS, bookMove, thinkTime, drawingMoves } from '../src/bots.js';
 import { cleanChat } from '../src/hub.js';
 import { COINS, toCoin } from '../src/wallet.js';
 import { parseInfo, scoreCp } from '../src/engine.js';
@@ -125,25 +123,6 @@ test('fair play: many honest strong games never cross the account line', () => {
   assert.notEqual(decide(reports.at(-1), acct), 'suspend');
 });
 
-test('every bot book line is legal chess', () => {
-  for (const b of Object.values(BOTS)) for (const c of ['w', 'b']) for (const line of b.book[c]) {
-    const g = new Chess();
-    for (const m of line.split(' ')) assert.doesNotThrow(() => g.move(m), `${b.id} ${c}: ${line} at ${m}`);
-  }
-});
-
-test('book moves follow the game prefix and the bot color', () => {
-  assert.ok(['e4', 'd4', 'Nf3', 'c4'].includes(bookMove('magnus', 'w', [])));
-  assert.equal(bookMove('kasparov', 'b', ['e4', 'c5', 'Nf3', 'd6', 'd4', 'cxd4', 'Nxd4', 'Nf6', 'Nc3']), 'a6');
-  assert.equal(bookMove('hikaru', 'w', ['a4']), null);
-});
-
-test('bot think time shrinks with the clock', () => {
-  const fast = thinkTime('kasparov', { ply: 30, clockMs: 30_000 }, 1, () => 0.5);
-  const slow = thinkTime('kasparov', { ply: 30, clockMs: 25 * 60_000 }, 1, () => 0.5);
-  assert.ok(fast <= 400 && slow > 1500);
-});
-
 test('coin conversion and address formats', () => {
   assert.equal(toCoin(10_000, 'BTC'), '0.00100000');
   assert.equal(toCoin(10_000, 'USDT'), '100.00');
@@ -159,19 +138,6 @@ test('UCI info parsing', () => {
   assert.equal(parseInfo('info depth 10 score cp 20 lowerbound pv e2e4'), null);
   assert.equal(scoreCp(parseInfo('info depth 5 score mate 3 pv a1a8')), 9970);
   assert.equal(scoreCp(parseInfo('info depth 5 score mate -2 pv a1a8')), -9980);
-});
-
-test('drawing moves: threefold repetition and stalemate are spotted, game left untouched', () => {
-  const c = new Chess();
-  for (const m of ['Nf3', 'Nf6', 'Ng1', 'Ng8', 'Nf3', 'Nf6', 'Ng1']) c.move(m);
-  const fen = c.fen();
-  assert.deepEqual([...drawingMoves(c)], ['f6g8']);
-  assert.equal(c.fen(), fen);
-  assert.equal(c.history().length, 7);
-  const s = new Chess('k7/8/1K6/2Q5/8/8/8/8 w - - 0 1');
-  assert.ok(drawingMoves(s).has('c5c7'));
-  assert.ok(!drawingMoves(s).has('c5c6'));
-  assert.equal(drawingMoves(new Chess()).size, 0);
 });
 
 test('chat text is cleaned and capped', () => {

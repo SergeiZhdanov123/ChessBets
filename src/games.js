@@ -2,8 +2,6 @@ import crypto from 'node:crypto';
 import { Chess } from 'chess.js';
 import { config } from './config.js';
 import { humanPayouts } from './money.js';
-import { BOTS, bookMove, thinkTime, drawingMoves } from './bots.js';
-import { scoreCp } from './engine.js';
 
 const UCI = /^[a-h][1-8][a-h][1-8][qrbn]?$/;
 const other = (c) => (c === 'w' ? 'b' : 'w');
@@ -28,7 +26,7 @@ export class LiveGame {
     this.kind = opts.kind;
     this.tc = opts.tc;
     this.stake = opts.stake;
-    this.white = opts.white; // { userId, username, holdId, ip, device } or { bot }
+    this.white = opts.white; // { userId, username, holdId, ip, device }
     this.black = opts.black;
     this.chess = new Chess();
     this.moves = [];
@@ -53,7 +51,6 @@ export class LiveGame {
   get turn() { return this.chess.turn(); }
   get ply() { return this.moves.length; }
   get clockRunning() { return this.status === 'active' && this.ply >= 2; }
-  isBot(color) { return !!this.side(color).bot; }
 
   remaining(color, at = Date.now()) {
     if (this.clockRunning && this.turn === color) return Math.max(0, this.clocks[color] - (at - this.turnStartedAt));
@@ -62,7 +59,6 @@ export class LiveGame {
 
   publicSide(color) {
     const s = this.side(color);
-    if (s.bot) return { bot: s.bot, name: BOTS[s.bot].name, fullName: BOTS[s.bot].fullName };
     return { userId: s.userId, name: s.username };
   }
 
@@ -73,7 +69,7 @@ export class LiveGame {
       kind: this.kind,
       tc: this.tc,
       stake: this.stake,
-      payouts: this.kind === 'human' ? humanPayouts(this.stake) : { win: this.stake * 2, draw: this.stake },
+      payouts: humanPayouts(this.stake),
       white: this.publicSide('w'),
       black: this.publicSide('b'),
       you: forUserId ? this.colorOf(forUserId) : null,
@@ -108,13 +104,12 @@ export class LiveGame {
     this.mgr.persistNew(this);
     this.armFirstMove();
     this.broadcast((c) => ({ t: 'game', game: this.snapshot(c.userId) }));
-    if (this.isBot(this.turn)) this.mgr.scheduleBot(this);
   }
 
   armFirstMove() {
     clearTimeout(this.timers.abort);
-    if (this.ply >= 2 || this.isBot(this.turn)) { this.firstMoveDeadline = null; return; }
-    const ms = this.kind === 'bot' ? config.botFirstMoveMs : config.firstMoveMs;
+    if (this.ply >= 2) { this.firstMoveDeadline = null; return; }
+    const ms = config.firstMoveMs;
     this.firstMoveDeadline = Date.now() + ms;
     this.timers.abort = setTimeout(() => this.end({ status: 'aborted', reason: 'no-first-move' }), ms);
   }
@@ -178,7 +173,6 @@ export class LiveGame {
     if (this.chess.isDraw()) return this.end({ result: '1/2-1/2', reason: 'fifty-moves' }), null;
 
     this.armFlag();
-    if (this.isBot(this.turn)) this.mgr.scheduleBot(this);
     return null;
   }
 
@@ -196,7 +190,6 @@ export class LiveGame {
 
   offerDraw(color) {
     if (this.status !== 'active' || this.ply < 2) return 'Not now';
-    if (this.kind === 'bot') return 'Bots play every game to the end';
     if (this.drawOffer === other(color)) return this.acceptDraw(color);
     if (this.ply - this.lastDrawOfferPly[color] < 6) return 'You offered a draw recently';
     this.drawOffer = color;
@@ -219,7 +212,7 @@ export class LiveGame {
   }
 
   presence(color, connected) {
-    if (this.status !== 'active' || this.isBot(color)) return;
+    if (this.status !== 'active') return;
     clearTimeout(this.timers['gone' + color]);
     if (connected) {
       if (this.gone[color]) { delete this.gone[color]; this.broadcast({ t: 'presence', id: this.id, gone: this.gone }); }
@@ -289,22 +282,6 @@ export function createGames(ctx) {
       return g;
     },
 
-    async createBot(user, botId, stake, colorPref, net = {}) {
-      if (!BOTS[botId]) throw Object.assign(new Error('Unknown bot'), { status: 400 });
-      // Right after a restart the engine may still be starting; give it a moment.
-      if (!ctx.botPool.healthy && !(await ctx.botPool.whenReady?.(8000))) throw Object.assign(new Error('The bots are offline for a moment. Try again shortly.'), { status: 503 });
-      const color = colorPref === 'w' || colorPref === 'b' ? colorPref : Math.random() < 0.5 ? 'w' : 'b';
-      const id = newId();
-      const holdId = await money.hold(user.id, stake, 'game', `game:${id}`);
-      const human = { userId: user.id, username: user.username, holdId, ip: net.ip, device: net.device };
-      const bot = { bot: botId };
-      const g = new LiveGame(mgr, { id, kind: 'bot', tc: config.botMinutes, stake, white: color === 'w' ? human : bot, black: color === 'b' ? human : bot });
-      live.set(g.id, g);
-      byUser.set(user.id, g.id);
-      g.start();
-      return g;
-    },
-
     // Money moves for a finished or aborted game, and the final game record,
     // in one transaction.
     async finish(g, fairplay) {
@@ -324,7 +301,7 @@ export function createGames(ctx) {
 
     async settle(g, fairplay) {
       const ref = `game:${g.id}`;
-      const seats = ['w', 'b'].map((c) => ({ c, ...g.side(c) })).filter((s) => s.userId);
+      const seats = ['w', 'b'].map((c) => ({ c, ...g.side(c) }));
       const out = { rake: 0, w: 0, b: 0 };
       if (g.status === 'aborted') {
         for (const s of seats) out[s.c] = await money.release(s.holdId, 'stake_return');
@@ -332,21 +309,6 @@ export function createGames(ctx) {
       }
       for (const s of seats) await money.consume(s.holdId);
       const winner = g.result === '1-0' ? 'w' : g.result === '0-1' ? 'b' : null;
-
-      if (g.kind === 'bot') {
-        const s = seats[0];
-        if (winner === s.c) {
-          out[s.c] = g.stake * 2;
-          await money.userEntry(s.userId, g.stake * 2, 'win', ref);
-          await money.house(-g.stake, 'bot_loss', ref);
-        } else if (!winner) {
-          out[s.c] = g.stake;
-          await money.userEntry(s.userId, g.stake, 'stake_return', ref, 'Draw');
-        } else {
-          await money.house(g.stake, 'bot_win', ref);
-        }
-        return out;
-      }
 
       const p = humanPayouts(g.stake);
       if (fairplay) {
@@ -374,11 +336,10 @@ export function createGames(ctx) {
       const winner = g.result === '1-0' ? 'w' : g.result === '0-1' ? 'b' : null;
       return {
         _id: g.id, kind: g.kind, tc: g.tc, stake: g.stake,
-        white_id: g.white.userId ?? null, black_id: g.black.userId ?? null,
-        white_name: g.white.username ?? null, black_name: g.black.username ?? null,
-        bot: g.white.bot || g.black.bot || null,
+        white_id: g.white.userId, black_id: g.black.userId,
+        white_name: g.white.username, black_name: g.black.username,
         status: g.status, result: g.result ?? null, reason: g.reason ?? null,
-        winner_id: winner ? g.side(winner).userId ?? null : null,
+        winner_id: winner ? g.side(winner).userId : null,
         moves: g.moves, fen: g.chess.fen(), ply: g.ply,
         rake: settlement?.rake ?? 0, payout_white: settlement?.w ?? 0, payout_black: settlement?.b ?? 0,
         white_ip: g.white.ip ?? null, black_ip: g.black.ip ?? null, white_device: g.white.device ?? null, black_device: g.black.device ?? null,
@@ -402,77 +363,15 @@ export function createGames(ctx) {
 
     async onEnded(g) {
       for (const c of ['w', 'b']) {
-        const s = g.side(c);
-        if (s.userId) { byUser.delete(s.userId); hub.pushBalance(s.userId); }
+        const { userId } = g.side(c);
+        byUser.delete(userId);
+        hub.pushBalance(userId);
       }
       setTimeout(() => live.delete(g.id), 10 * 60_000).unref?.();
       if (g.status !== 'finished') { ctx.fairplay?.live.delete(g.id); return; }
       if (g.settlement) hub.feed(feedShape({ id: g.id, ...mgr.doc(g, g.settlement) }));
       ctx.track(ctx.fairplay?.finishGame(g).catch((err) => console.error('fair play analysis failed', g.id, err.message)));
       await ctx.enforcement?.gameEnded(g).catch((err) => console.error('game checks failed', g.id, err.message));
-    },
-
-    // ---- bots ----
-    scheduleBot(g) {
-      const color = g.turn;
-      const botId = g.side(color).bot;
-      const san = g.moves.map((m) => m.s);
-      const book = bookMove(botId, color, san);
-      const started = Date.now();
-      const ply = g.ply;
-      const play = (uci) => {
-        if (ctx.closed || g.status !== 'active' || g.ply !== ply) return;
-        const err = g.move(color, uci);
-        if (err) console.error('bot move rejected', g.id, uci, err);
-      };
-      if (book) {
-        const c = new Chess(g.chess.fen());
-        const mv = c.move(book);
-        const delay = Math.round((350 + Math.random() * 700) * config.botMoveScale);
-        g.timers.bot = setTimeout(() => play(mv.from + mv.to + (mv.promotion || '')), delay);
-        return;
-      }
-      // Only one legal move: no need to think about it.
-      const legal = g.chess.moves({ verbose: true });
-      if (legal.length === 1) {
-        const m = legal[0];
-        g.timers.bot = setTimeout(() => play(m.from + m.to + (m.promotion || '')), Math.round(300 * config.botMoveScale));
-        return;
-      }
-      const movetime = thinkTime(botId, { ply, clockMs: g.remaining(color) }, config.botMoveScale);
-      const history = g.moves.map((m) => m.u);
-      mgr.botMove(history, movetime, drawingMoves(g.chess), legal.length).then((uci) => {
-        if (!uci) throw new Error('engine returned no move');
-        g.botFailures = 0;
-        const wait = Math.max(0, Math.round(150 * config.botMoveScale) - (Date.now() - started));
-        g.timers.bot = setTimeout(() => play(uci), wait);
-      }).catch((err) => {
-        if (ctx.closed || g.status !== 'active' || g.ply !== ply) return;
-        g.botFailures = (g.botFailures || 0) + 1;
-        console.error('bot search failed', g.id, `attempt ${g.botFailures}`, err.message);
-        // The engine is down. Rather than let the bot's clock run out, call
-        // the game off and give the player their wager back.
-        if (g.botFailures >= 3) { g.end({ status: 'aborted', reason: 'bot-unavailable' }); return; }
-        g.timers.bot = setTimeout(() => g.status === 'active' && g.ply === ply && mgr.scheduleBot(g), 1000);
-      });
-    },
-
-    // Bots play for a win. If the engine's choice would end the game in a
-    // draw, search again over every move that doesn't, and play the best of
-    // those unless it leaves the bot clearly lost (a loss pays out double,
-    // which is worse for the house than a draw).
-    async botMove(history, movetime, drawing, legalCount) {
-      // A timed search that stops early once it is this deep: at depth 22
-      // Stockfish is far beyond any human, and the extra time buys nothing.
-      const first = await ctx.botPool.search({ moves: history, movetime, stopDepth: config.botStopDepth });
-      if (!first.best || !drawing.has(first.best)) return first.best;
-      if (drawing.size >= legalCount) return first.best; // every move draws
-      const c = new Chess();
-      for (const u of history) c.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u[4] });
-      const others = c.moves({ verbose: true }).map((m) => m.from + m.to + (m.promotion || '')).filter((u) => !drawing.has(u));
-      const second = await ctx.botPool.search({ moves: history, movetime: Math.max(200, movetime / 2), searchmoves: others, stopDepth: config.botStopDepth });
-      const score = second.lines[0] ? scoreCp(second.lines[0]) : 0;
-      return second.best && score > -300 ? second.best : first.best;
     },
 
     // After a restart nothing in memory survived. Games that were in progress
@@ -501,7 +400,7 @@ export function feedShape(r) {
     const name = c === 'w' ? r.white_name : r.black_name;
     if (!name) continue;
     rows.push({
-      game: r.id, user: name, kind: r.kind, tc: r.tc, bot: r.bot, stake: r.stake,
+      game: r.id, user: name, kind: r.kind, tc: r.tc, stake: r.stake,
       payout: c === 'w' ? r.payout_white : r.payout_black,
       outcome: r.result === '1/2-1/2' ? 'draw' : youWin(c) ? 'win' : 'loss',
       at: r.ended_at,
