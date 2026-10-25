@@ -200,6 +200,27 @@ test('USDT on Tron: one wallet, deposits told apart by exact amount', async () =
   await checkBooks(app.ctx.db);
 });
 
+test('USDT: a paid amount is not handed out again, so a repeat payment cannot land on someone else', async () => {
+  const j = await player('joe');
+  const k = await player('kim');
+  const dj = (await j.req('/api/wallet/deposit', { coin: 'USDT-TRC20', amount: 4000 })).data.deposit;
+  assert.equal(dj.coin_amount, '40.00');
+  usdtTx(40_000_000);
+  await sweep();
+  assert.equal(await j.balance(), 4000);
+
+  // Kim asks for the same dollar amount after Jo's request was paid.
+  const dk = (await k.req('/api/wallet/deposit', { coin: 'USDT-TRC20', amount: 4000 })).data.deposit;
+  assert.notEqual(dk.coin_amount, '40.00');
+  // Jo pays 40.00 again: it must not count for Kim.
+  const again = usdtTx(40_000_000);
+  await sweep();
+  assert.equal(await k.balance(), 0);
+  assert.equal(await j.balance(), 4000, 'not credited twice either');
+  assert.equal((await payment(`trx:${again.transaction_id}`)).status, 'unmatched', 'the repeat waits for staff');
+  await checkBooks(app.ctx.db);
+});
+
 test('staff credit an unmatched payment by hand, once', async () => {
   const i = await player('ivy');
   const short = chain.tron.find((t) => t.value === '24750000');

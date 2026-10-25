@@ -12,7 +12,7 @@ export default function historyView(el) {
   }
   api('/api/my/games').then(({ games }) => {
     if (!games.length) {
-      box.innerHTML = `<div class="card card-pad empty">No games yet.<div style="margin-top:14px;display:flex;gap:8px;justify-content:center"><a class="btn btn-green" href="/play">Play a Human</a><a class="btn btn-gray" href="/bots">Play a Bot</a></div></div>`;
+      box.innerHTML = `<div class="card card-pad empty">No games yet.<div style="margin-top:14px;display:flex;gap:8px;justify-content:center"><a class="btn btn-green" href="/play">Play a Human</a></div></div>`;
       return;
     }
     const totals = games.reduce((t, g) => {
@@ -36,7 +36,7 @@ export default function historyView(el) {
           const net = g.outcome === 'aborted' ? 0 : g.payout - g.stake;
           const res = { win: '<span class="green">Won</span>', loss: 'Lost', draw: 'Draw', aborted: 'Aborted' }[g.outcome];
           return `<tr>
-            <td><a class="gamecell rowlink" href="/game/${esc(g.id)}">${icon(g.kind === 'bot' ? 'bot' : 'users')}${g.kind === 'bot' ? 'Bot' : 'Human'} · ${g.tc} min</a></td>
+            <td><a class="gamecell rowlink" href="/game/${esc(g.id)}">${icon('users')}Human · ${g.tc} min</a></td>
             <td class="strong">${esc(g.opponent || '-')}</td>
             <td>${res} <span class="dim">${esc(g.outcome === 'aborted' ? '' : reasonText(g.reason))}</span></td>
             <td>${dateTime(g.at)}</td>

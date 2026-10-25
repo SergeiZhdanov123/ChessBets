@@ -3,7 +3,7 @@ import { store } from '../store.js';
 import { navigate } from '../app.js';
 
 const HOUSE_LABEL = {
-  rake: 'Rake', withdraw_fee: 'Withdrawal fees', bot_win: 'Bot games won', bot_loss: 'Bot games lost',
+  rake: 'Rake', withdraw_fee: 'Withdrawal fees',
   forfeit: 'Forfeited balances', fairplay_refund: 'Fair-play refunds', reinstated: 'Restored balances',
 };
 
@@ -17,6 +17,8 @@ export default function admin(el, [userId]) {
     const [o, t, pay] = await Promise.all([api('/api/admin/overview'), api('/api/admin/tickets'), api('/api/admin/payments')]);
     const house = Object.fromEntries(o.house.map((h) => [h.kind, h]));
     const net = o.house.reduce((s, h) => s + h.total, 0);
+    // Ledger kinds with no label of their own (left over from removed features).
+    const other = o.house.filter((h) => !HOUSE_LABEL[h.kind]).reduce((m, h) => ({ n: m.n + h.n, total: m.total + h.total }), { n: 0, total: 0 });
     box.innerHTML = `
       <div class="kpis">
         <div class="kpi"><span>House result</span><b class="${net >= 0 ? 'green' : 'red'}">${money(net, { sign: true })}</b></div>
@@ -27,7 +29,7 @@ export default function admin(el, [userId]) {
       </div>
       <div class="card card-pad" style="margin-bottom:18px">
         <h3 style="font-size:15px;margin-bottom:8px">Where the house money came from</h3>
-        <table class="table"><tbody>${Object.entries(HOUSE_LABEL).filter(([k]) => !k.startsWith('bot_') || house[k]).map(([k, label]) => `<tr><td>${label}</td><td class="r num">${house[k]?.n || 0}</td><td class="r num strong">${money(house[k]?.total || 0, { sign: true })}</td></tr>`).join('')}</tbody></table>
+        <table class="table"><tbody>${Object.entries(HOUSE_LABEL).map(([k, label]) => `<tr><td>${label}</td><td class="r num">${house[k]?.n || 0}</td><td class="r num strong">${money(house[k]?.total || 0, { sign: true })}</td></tr>`).join('')}${other.n ? `<tr><td>Other</td><td class="r num">${other.n}</td><td class="r num strong">${money(other.total, { sign: true })}</td></tr>` : ''}</tbody></table>
       </div>
 
       ${pay.mode === 'crypto' ? paymentsHtml(pay) : ''}

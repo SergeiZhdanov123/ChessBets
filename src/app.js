@@ -170,14 +170,12 @@ export async function createApp(opts = {}) {
       const moves = r.moves || [];
       const side = (c) => {
         const uid = c === 'w' ? r.white_id : r.black_id;
-        // Games against the old house bots have no user on the bot's side.
-        if (!uid) return { bot: true, name: 'House bot' };
         return { userId: uid, name: c === 'w' ? r.white_name : r.black_name };
       };
       const you = viewerId && r.white_id === viewerId ? 'w' : viewerId && r.black_id === viewerId ? 'b' : null;
       return {
         id: r.id, kind: r.kind, tc: r.tc, stake: r.stake,
-        payouts: r.kind === 'human' ? humanPayouts(r.stake) : { win: r.stake * 2, draw: r.stake },
+        payouts: humanPayouts(r.stake),
         white: side('w'), black: side('b'), you,
         fen: r.fen, moves: moves.map((m) => ({ u: m.u, s: m.s })),
         clocks: { w: moves.filter((_, i) => i % 2 === 0).at(-1)?.c ?? r.tc * 60_000, b: moves.filter((_, i) => i % 2 === 1).at(-1)?.c ?? r.tc * 60_000 },
@@ -368,7 +366,7 @@ export async function createApp(opts = {}) {
     res.json({
       games: rows.map((r) => {
         const color = r.white_id === me ? 'w' : 'b';
-        const opp = r.kind === 'bot' ? 'House bot' : color === 'w' ? r.black_name : r.white_name;
+        const opp = color === 'w' ? r.black_name : r.white_name;
         const payout = color === 'w' ? r.payout_white : r.payout_black;
         const outcome = r.status === 'aborted' ? 'aborted' : r.result === '1/2-1/2' ? 'draw' : (r.result === '1-0') === (color === 'w') ? 'win' : 'loss';
         return { id: r.id, kind: r.kind, tc: r.tc, stake: r.stake, color, opponent: opp, outcome, reason: r.reason, payout, plies: r.ply ?? 0, at: r.ended_at || r.created_at };

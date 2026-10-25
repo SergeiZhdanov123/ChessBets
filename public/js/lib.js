@@ -112,7 +112,6 @@ export function emitter() {
 const P = {
   home: '<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h5v-6h4v6h5V9.5"/>',
   users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.2-5.5 6.5-5.5s5.9 1.9 6.5 5.5"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8"/><path d="M18.5 14.8c1.7.8 2.8 2.5 3 5.2"/>',
-  bot: '<rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4"/><circle cx="12" cy="3.5" r="1"/><circle cx="9" cy="14" r="1.3" fill="currentColor"/><circle cx="15" cy="14" r="1.3" fill="currentColor"/><path d="M2 13v3M22 13v3"/>',
   wallet: '<path d="M19 7V5.5A1.5 1.5 0 0 0 17.5 4h-12A2.5 2.5 0 0 0 3 6.5v11A2.5 2.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15"/><path d="M3 6.5A2.5 2.5 0 0 0 5.5 9H20a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1h-3.5a2.5 2.5 0 0 1 0-5"/>',
   history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>',
   shield: '<path d="M12 3 4.5 6v5.5c0 4.6 3.2 8.3 7.5 9.5 4.3-1.2 7.5-4.9 7.5-9.5V6Z"/><path d="m9 12 2 2 4-4"/>',
@@ -170,5 +169,5 @@ export const reasonText = (r, result, you) => ({
   checkmate: 'by checkmate', resign: 'by resignation', timeout: 'on time', 'timeout-draw': 'timeout vs insufficient material',
   stalemate: 'by stalemate', repetition: 'by threefold repetition', insufficient: 'by insufficient material', 'fifty-moves': 'by the 50-move rule',
   agreement: 'by agreement', abandoned: 'by abandonment', 'fair-play': 'by fair-play decision', aborted: 'Game aborted',
-  'no-first-move': 'No first move in time', 'abandoned-early': 'Player left before the game started', 'server-restart': 'Server restarted', 'bot-unavailable': 'Bot unavailable, wager returned',
+  'no-first-move': 'No first move in time', 'abandoned-early': 'Player left before the game started', 'server-restart': 'Server restarted',
 })[r] || r || '';

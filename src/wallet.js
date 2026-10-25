@@ -35,6 +35,10 @@ function demoAddress(coin) {
 }
 
 const DAY = 86_400_000;
+// A USDT amount handed to one request is not handed to another for this
+// long, paid or not. Otherwise a player who sends the same amount again
+// (from their wallet history, say) could pay into someone else's request.
+const AMOUNT_RESERVED_MS = 7 * DAY;
 const EXPLORERS = {
   main: ['https://mempool.space/api', 'https://blockstream.info/api'],
   test: ['https://mempool.space/testnet/api', 'https://blockstream.info/testnet/api'],
@@ -200,7 +204,7 @@ export function createWallet(ctx) {
     // db.tx runs one at a time, so two requests can't pick the same amount.
     await db.tx(async () => {
       const taken = new Set((await db.deposits.find(
-        { kind: 'invoice', coin, status: { $in: ['awaiting', 'expired'] }, created_at: { $gt: now() - 3 * DAY } },
+        { kind: 'invoice', coin, created_at: { $gt: now() - AMOUNT_RESERVED_MS } },
         { projection: { coin_amount: 1 } },
       )).map((d) => d.coin_amount));
       let cents = amount;

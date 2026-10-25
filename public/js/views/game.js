@@ -207,8 +207,7 @@ export default function gameView(el, [id]) {
 
   function sideInfo(color) {
     const s = color === 'w' ? g.white : g.black;
-    // s.bot only appears on old games against the retired house bots.
-    return { name: s.name || 'Player', sub: s.bot ? 'Bot' : color === you() ? 'You' : '', av: userAvatar(s.name || '?') };
+    return { name: s.name || 'Player', sub: color === you() ? 'You' : '', av: userAvatar(s.name || '?') };
   }
 
   function material(color) {
@@ -295,7 +294,6 @@ export default function gameView(el, [id]) {
 
   function paintPanel() {
     if (!g) return;
-    const isBot = g.kind === 'bot'; // an old game against a retired house bot
     const n = g.moves.length;
     const mine = you();
     let actions = '';
@@ -318,15 +316,15 @@ export default function gameView(el, [id]) {
     // is built once, so a half-typed message survives incoming moves.
     if (!panel.querySelector('#gpMain')) panel.innerHTML = '<div id="gpMain" style="display:flex;flex-direction:column;flex:1;min-height:0"></div><div id="gpChat"></div>';
     const main = panel.querySelector('#gpMain');
-    if (!isBot && mine) buildChat();
+    if (mine) buildChat();
     main.innerHTML = `
       <div class="gp-head">
-        <span class="t">${icon(isBot ? 'bot' : 'users')}${isBot ? 'House bot' : 'Human'} · ${g.tc} min</span>
+        <span class="t">${icon('users')}Human · ${g.tc} min</span>
         <span class="dim" style="font-weight:600;font-size:12.5px">${active() ? 'Live' : 'Finished'}</span>
       </div>
       <div class="gp-pot">
         <div class="box"><span>Wager</span><b>${money(g.stake)}</b></div>
-        <div class="box"><span>${isBot ? 'Win pays' : 'Win pays (after rake)'}</span><b class="green">${money(g.payouts.win)}</b></div>
+        <div class="box"><span>Win pays (after rake)</span><b class="green">${money(g.payouts.win)}</b></div>
       </div>
       <div class="muted" style="font-weight:600;margin:0 2px 10px;min-height:20px" id="status">${statusLine()}</div>
       ${offer}
@@ -380,7 +378,6 @@ export default function gameView(el, [id]) {
   }
 
   function again() {
-    if (g.kind === 'bot') return '<a class="btn btn-green" href="/play">Play a human</a>';
     return `<a class="btn btn-green" href="/play?tc=${g.tc}&stake=${g.stake}&go=1">New game</a>`;
   }
 

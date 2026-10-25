@@ -79,11 +79,9 @@ export default function home(el) {
   let rows = [];
   const tbody = el.querySelector('#feed');
   const row = (r, fresh) => {
-    const name = r.kind === 'bot' ? 'House bot' : 'Human';
-    const gameIcon = r.kind === 'bot' ? icon('bot') : icon('users');
     const payout = r.outcome === 'win' ? `<span class="green">${money(r.payout)}</span>` : r.outcome === 'draw' ? `<span class="strong">${money(r.payout)}</span>` : `<span>${money(-r.stake)}</span>`;
     return `<tr class="${fresh ? 'new' : ''}">
-      <td><a class="gamecell rowlink" href="/game/${esc(r.game)}">${gameIcon}${esc(name)}</a></td>
+      <td><a class="gamecell rowlink" href="/game/${esc(r.game)}">${icon('users')}Human</a></td>
       <td class="strong">${esc(r.user)}</td>
       <td>${r.tc} min · ${ago(r.at)}</td>
       <td class="r num">${money(r.stake)}</td>
