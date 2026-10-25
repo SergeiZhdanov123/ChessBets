@@ -34,7 +34,7 @@ try {
       await page.waitForTimeout(400);
       await page.screenshot({ path: `${out}/desk-register.png` });
       await page.keyboard.press('Escape');
-      for (const p of ['terms', 'privacy', 'fair-play']) {
+      for (const p of ['terms', 'privacy', 'fair-play', 'legal']) {
         await page.goto(`${base}/${p}`);
         await page.waitForSelector('.prose h1');
         await page.screenshot({ path: `${out}/desk-${p}.png`, fullPage: true });

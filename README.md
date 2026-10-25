@@ -68,14 +68,16 @@ Real-money wagering is regulated almost everywhere. Get legal advice before you 
 |---|---|
 | Rake | 3% of the pot on every human game that is played, draws included. Aborted games (no first move) are refunded in full. |
 | Lobby stats | Each number in the strip under the banners (online, games in progress, games today, wagered today) shows only once it reaches its minimum: 10, 3, 25 and $500 by default (`STATS_MIN_ONLINE`, `STATS_MIN_PLAYING`, `STATS_MIN_GAMES`, `STATS_MIN_WAGERED_CENTS`). The strip is hidden while none do. Set a minimum to 0 to always show it. |
-| $1 / $5 / $10 win | $1.92 / $9.60 / $19.20 |
-| Draw returns | $0.96 / $4.80 / $9.60 per player |
+| $1 / $5 / $10 win | $1.94 / $9.70 / $19.40 |
+| Draw returns | $0.97 / $4.85 / $9.70 per player |
 | Withdrawal fee | 5%, minimum withdrawal $5 |
 | Currencies | Paper: BTC, ETH, USDT, USDC, SOL, LTC, DOGE at reference rates. Real: BTC, and USDT on Tron |
 
 Deposit addresses look like `demo-btc-...` on purpose, so nobody can send real coins to one. A "test deposit" walks through confirmations and then credits the balance.
 
 **Visitors.** Admin shows unique visitors today, yesterday and over 7 days: one per browser (device cookie) per UTC day, counted when the page loads its config, so crawlers that don't run scripts and admins are left out. Records (`visits` collection) expire after 90 days.
+
+**Legal pages.** Terms, Privacy, Fair Play and Legal Basis (`/legal`, the public statement of ChessBets' legal position) live in `public/js/views/pages.js`. The Terms describe games as skill competitions with entry fees, prizes and a service fee, and restrict balances to entries, prizes, refunds and withdrawals to the player's own wallet; the Legal Basis page relies on those facts, so keep both in step with the product.
 
 **Making the site unavailable.** Admin has a "Make unavailable" button at the top. While it's on, players get a single "ChessBets is unavailable" box with nothing to click, every API call is refused, and open tabs reload into the notice. Games in progress are voided with both stakes returned and the queues are emptied. Deposits keep being credited. Admins can still sign in at `/login` and use the whole site, and "Reopen the site" turns it back off. The setting is stored in the database (`settings` collection), so a restart or redeploy keeps it.
 

@@ -30,8 +30,8 @@ export function openAuth(mode = 'login', { then } = {}) {
     </div>
     ${reg ? `
       <div class="auth-checks">
-        <label class="check"><input type="checkbox" name="adult"> <span>I am at least 18 and of legal age to wager where I live.</span></label>
-        <label class="check"><input type="checkbox" name="terms"> <span>I accept the <a href="/terms" target="_blank">Terms of Service</a>, <a href="/privacy" target="_blank">Privacy Policy</a> and <a href="/fair-play" target="_blank">Fair Play rules</a>, including that suspended balances are not refunded.</span></label>
+        <label class="check"><input type="checkbox" name="adult"> <span>I am at least 18, and paid skill competitions are legal for me where I am.</span></label>
+        <label class="check"><input type="checkbox" name="terms"> <span>I accept the <a href="/terms" target="_blank">Terms of Service</a>, <a href="/privacy" target="_blank">Privacy Policy</a> and <a href="/fair-play" target="_blank">Fair Play rules</a>, including that suspended balances are not refunded and withdrawals go only to my own wallet.</span></label>
       </div>
     ` : ''}
     <div class="form-error" role="alert"></div>

@@ -188,7 +188,7 @@ await check('suspension: banner, no refund message, play blocked, support reacha
 
 await check('mobile: no horizontal scroll, board fits, bottom nav present', async () => {
   const m = await newUser('mobile_e2e', { viewport: { width: 390, height: 844 } });
-  for (const p of ['/', '/play', '/fair-play', '/terms']) {
+  for (const p of ['/', '/play', '/fair-play', '/terms', '/legal']) {
     await m.goto(base + p);
     await m.waitForTimeout(250);
     const over = await m.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
