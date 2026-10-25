@@ -3,7 +3,7 @@ import { store } from '../store.js';
 import { navigate } from '../app.js';
 
 const HOUSE_LABEL = {
-  rake: 'Rake', withdraw_fee: 'Withdrawal fees',
+  rake: 'Rake', withdraw_fee: 'Withdrawal fees', account_closed: 'Balances of removed accounts',
   forfeit: 'Forfeited balances', fairplay_refund: 'Fair-play refunds', reinstated: 'Restored balances',
 };
 
