@@ -261,6 +261,58 @@ test('withdrawals: checksummed addresses, then sent or declined by staff', async
   await checkBooks(app.ctx.db);
 });
 
+test('suspension with withdrawals waiting: staff mark sent what went out and forfeit the rest', async () => {
+  const lee = await player('lee');
+  assert.equal((await admin.req(`/api/admin/users/${lee.user.id}/credit`, { amount: 5000, txid: 'leedeposit0001', coin: 'USDT-TRC20' })).status, 200);
+  const w1 = (await lee.req('/api/wallet/withdraw', { coin: 'USDT-TRC20', address: TRON, amount: 2000 })).data.withdrawal;
+  const w2 = (await lee.req('/api/wallet/withdraw', { coin: 'USDT-TRC20', address: TRON, amount: 1000 })).data.withdrawal;
+  assert.equal(await lee.balance(), 2000);
+
+  await app.ctx.enforcement.suspend(lee.user.id, 'test');
+  // The coins may already be on their way, so nothing is forfeited yet.
+  assert.equal((await app.ctx.db.withdrawals.findOne({ _id: w1.id })).status, 'processing');
+  assert.equal((await app.ctx.db.users.findOne({ _id: lee.user.id })).forfeited, 2000);
+  const view = (await admin.req('/api/admin/payments')).data;
+  assert.equal(view.withdrawals.find((w) => w.id === w1.id).user_status, 'suspended');
+
+  // Staff had sent w1 already: recording it must still work.
+  assert.equal((await admin.req(`/api/admin/withdrawals/${w1.id}/sent`, { txid: 'leesent00000001' })).status, 200);
+  assert.equal((await app.ctx.db.withdrawals.findOne({ _id: w1.id })).status, 'completed');
+  // w2 was never sent: declining it forfeits it, it doesn't land in the suspended balance.
+  assert.equal((await admin.req(`/api/admin/withdrawals/${w2.id}/reject`, {})).status, 200);
+  const u = await app.ctx.db.users.findOne({ _id: lee.user.id });
+  assert.equal(u.balance, 0);
+  assert.equal(u.forfeited, 3000);
+  assert.ok(await app.ctx.db.ledger.findOne({ user_id: null, kind: 'forfeit', ref: `withdrawal:${w2.id}`, amount: 1000 }));
+  await checkBooks(app.ctx.db);
+});
+
+test('bitcoin: a payment that vanishes before confirming is marked dropped, and revives if it comes back', async () => {
+  const mo = await player('moe');
+  const addr = (await mo.req('/api/wallet/address', { coin: 'BTC' })).data.address;
+  const t = btcTx([[addr, 20_000]]);
+  await sweep();
+  let dep = (await mo.req('/api/wallet')).data.deposits[0];
+  assert.equal(dep.status, 'confirming');
+
+  chain.btc.splice(chain.btc.indexOf(t), 1); // replaced by a double spend
+  await sweep();
+  assert.equal((await app.ctx.db.deposits.findOne({ _id: dep.id })).status, 'confirming', 'one missed look is not enough');
+  await app.ctx.db.deposits.update({ _id: dep.id }, { $set: { missing_since: Date.now() - 31 * 60_000 } });
+  await sweep();
+  dep = (await mo.req('/api/wallet')).data.deposits[0];
+  assert.equal(dep.status, 'dropped');
+  assert.equal((await payment(`btc:${t.txid}:${addr}`)).status, 'dropped');
+
+  chain.btc.unshift(t); // rebroadcast after all
+  await sweep();
+  assert.equal((await app.ctx.db.deposits.findOne({ _id: dep.id })).status, 'confirming');
+  t.status = { confirmed: true, block_height: chain.tip - 1 };
+  await sweep();
+  assert.equal(await mo.balance(), Math.floor((20_000 * chain.usd) / 1e6));
+  await checkBooks(app.ctx.db);
+});
+
 test('a paper-money database is never opened for real money', async () => {
   const uri = await testMongo();
   const name = testDbName('paperdb');

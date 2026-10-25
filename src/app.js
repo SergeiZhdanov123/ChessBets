@@ -490,10 +490,11 @@ export async function createApp(opts = {}) {
       db.visits.count({ day: dayAgo(1) }),
       db.visits.aggregate([{ $match: { day: { $gte: dayAgo(6) } } }, { $group: { _id: '$device' } }, { $count: 'n' }]).then((r) => r[0]?.n ?? 0),
     ]);
+    const unsettled = await db.games.find({ status: 'unsettled' }, { projection: { white_name: 1, black_name: 1, stake: 1, result: 1, final_status: 1, ended_at: 1 }, sort: { ended_at: 1 }, limit: 100 });
     const refunds = await db.refunds.find({ status: 'pending' }, { sort: { created_at: 1 }, limit: 200 });
     const who = new Map((await db.users.find({ _id: { $in: [...new Set(refunds.flatMap((r) => [r.user_id, r.cheater_id]))] } }, { projection: { username: 1 } })).map((u) => [u.id, u.username]));
     for (const r of refunds) { r.username = who.get(r.user_id) || null; r.cheater = who.get(r.cheater_id) || null; }
-    res.json({ house, flagged, pending, refunds, totals: { users, balances, held, games, openTickets }, visitors: { today: visitorsToday, yesterday: visitorsYesterday, week: visitors7d }, model: MODEL });
+    res.json({ house, flagged, pending, refunds, unsettled, totals: { users, balances, held, games, openTickets }, visitors: { today: visitorsToday, yesterday: visitorsYesterday, week: visitors7d }, model: MODEL });
   }));
   app.get('/api/admin/users', needUser, needAdmin, wrap(async (req, res) => {
     const q = String(req.query.q || '').toLowerCase().slice(0, 32);
@@ -559,7 +560,7 @@ export async function createApp(opts = {}) {
   app.post('/api/admin/withdrawals/:id/sent', needUser, needAdmin, wrap(async (req, res) => {
     const txid = String(req.body?.txid || '').trim();
     if (!/^[A-Za-z0-9]{8,128}$/.test(txid)) return res.status(400).json({ error: 'Paste the transaction id of the payment you sent' });
-    if (!(await ctx.wallet.completeWithdraw(Number(req.params.id), txid))) return res.status(409).json({ error: 'This withdrawal is no longer open, or the account is suspended' });
+    if (!(await ctx.wallet.completeWithdraw(Number(req.params.id), txid))) return res.status(409).json({ error: 'This withdrawal is no longer open' });
     res.json({ ok: true });
   }));
   app.post('/api/admin/withdrawals/:id/reject', needUser, needAdmin, wrap(async (req, res) => {

@@ -48,6 +48,8 @@ How it works:
 - Every minute (`CRYPTO_POLL_MS`) the server checks addresses shown in the last three days, and a player waiting on the deposit screen triggers a check every 20 seconds. Render's free tier sleeps when idle, so a payment that confirms while nobody is on the site is credited when it wakes.
 - Each payment is credited once (keyed by transaction id). Money reaching a suspended account is held, not credited or forfeited. Payments that match nothing show in Admin > Payments under "Payments that need a person"; credit them from the player's admin page with the txid.
 - Withdrawals wait in Admin > Payments: send the coins from Electrum or your Tron wallet, paste the txid, and press Mark sent (the 5% fee goes to the house then). Decline returns the full amount to the player.
+- If an account is suspended while it has withdrawals waiting, they stay in the list marked suspended, because you may already have sent the coins. Mark sent if you did; otherwise press Forfeit, which moves the amount to the house.
+- An unconfirmed bitcoin payment that the explorers stop listing for 30 minutes (replaced or dropped by the network) is marked "Not confirmed" for the player. If it reappears, it carries on as normal.
 - Wallet apps only look 20 unused addresses ahead. If many players open the deposit screen without paying, Admin warns you and gives the Electrum console line that makes it look further.
 
 Real-money wagering is regulated almost everywhere. Get legal advice before you switch this on.
@@ -164,6 +166,8 @@ The server tests check after every scenario that each user's ledger sums to thei
 | `BTC_API` / `BTC_PRICE_URLS` / `TRON_API` / `TRONGRID_API_KEY` | mempool.space, blockstream.info, Coinbase / TronGrid | comma-separated fallbacks |
 
 Live games and the queues live in the server's memory, so run one instance. On restart, unfinished games are voided and every open stake is returned.
+
+If the money for a finished game can't be moved (the database is unreachable, say), the game is tried three times, then stored as `unsettled` with the stakes still held, retried every 30 seconds (`SETTLE_RETRY_MS`), and settled on the next start if it still hasn't gone through. Admin shows a red banner while any are waiting.
 
 ## Credits
 

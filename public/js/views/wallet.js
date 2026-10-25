@@ -351,7 +351,7 @@ export function openWallet(tab) {
     }
     const [cls, text] = {
       credited: ['ok', 'Credited'], forfeited: ['bad', 'Forfeited'], awaiting: ['wait', 'Waiting for payment'],
-      expired: ['', 'Expired'], held: ['bad', 'On hold'],
+      expired: ['', 'Expired'], held: ['bad', 'On hold'], dropped: ['bad', 'Not confirmed'],
     }[x.status] || ['', x.status];
     return `<span class="status ${cls}">${text}</span>`;
   }

@@ -69,6 +69,7 @@ export const config = {
   depositConfirmMs: num(env.DEPOSIT_CONFIRM_MS, 1500),
   withdrawProcessMs: num(env.WITHDRAW_PROCESS_MS, 2500),
   scheduleTickMs: num(env.SCHEDULE_TICK_MS, 15_000),
+  settleRetryMs: num(env.SETTLE_RETRY_MS, 30_000),    // games whose money didn't move yet
 
   sessionDays: 30,
   registerPerHour: num(env.REGISTER_PER_HOUR, 5),

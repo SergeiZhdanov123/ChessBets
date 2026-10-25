@@ -384,7 +384,7 @@ test('scheduled suspension: withdrawals held under review, then the balance is f
   const s = await db().users.findOne({ _id: a.user.id });
   assert.equal(s.status, 'suspended');
   assert.equal(s.balance, 0);
-  assert.equal(s.forfeited, 4000);
+  assert.equal(s.forfeited, 5000, 'the balance and the withdrawal it held back');
   assert.equal((await db().withdrawals.findOne({ _id: w.data.withdrawal.id })).status, 'rejected');
   await a.wait((m) => m.t === 'suspended');
 
@@ -453,6 +453,58 @@ test('admin: hidden from players, can reinstate with balance', async () => {
   assert.equal(await p.balance(), 1000);
   await checkBooks(db());
   p.close();
+});
+
+test('a game whose money cannot move is parked, kept out of the books, and settled on retry', async () => {
+  const a = await player(), b = await player();
+  const g = await match(a, b, 3, 500);
+  await play(g, ['e4', 'e5']);
+  const real = app.ctx.games.settle;
+  app.ctx.games.settle = async () => { throw new Error('database unavailable'); };
+  try {
+    g.black.send({ t: 'resign', id: g.id });
+    await a.wait((m) => m.t === 'end' && m.id === g.id, 10_000);
+  } finally { app.ctx.games.settle = real; }
+  const doc = await db().games.findOne({ _id: g.id });
+  assert.equal(doc.status, 'unsettled');
+  assert.equal(await g.white.balance(), 10_000 - 500, 'stake still held, nothing paid yet');
+  assert.equal(await app.ctx.money.heldTotal(g.white.user.id), 500);
+
+  assert.equal(await app.ctx.games.retryUnsettled(), 1);
+  assert.equal((await db().games.findOne({ _id: g.id })).status, 'finished');
+  assert.equal(await g.white.balance(), 10_000 - 500 + 970);
+  assert.equal(await app.ctx.games.retryUnsettled(), 0, 'settled once');
+  await checkBooks(db());
+  a.close(); b.close();
+});
+
+test('restart: a finished game that never settled pays the winner instead of voiding', async () => {
+  const shared = { analysisPool: app.ctx.analysisPool };
+  const one = await boot(shared);
+  const [a, b] = [new Client(one.base), new Client(one.base)];
+  for (const [cl, name] of [[a, 'unsettled_a'], [b, 'unsettled_b']]) { await cl.register(name); await cl.fund(1000); await cl.connect(); }
+  a.send({ t: 'queue-join', tc: 3, stake: 500 });
+  await a.wait((m) => m.t === 'queue' && m.state === 'joined');
+  b.send({ t: 'queue-join', tc: 3, stake: 500 });
+  const m = await a.wait((x) => x.t === 'matched');
+  await b.wait((x) => x.t === 'matched');
+  for (const cl of [a, b]) { cl.send({ t: 'sub', id: m.id }); await cl.wait((x) => x.t === 'game' && x.game.id === m.id); }
+  const live = one.ctx.games.get(m.id);
+  const g = { id: m.id, white: live.white.userId === a.user.id ? a : b, black: live.white.userId === a.user.id ? b : a };
+  await play(g, ['e4', 'e5']);
+  one.ctx.games.settle = async () => { throw new Error('database unavailable'); };
+  g.black.send({ t: 'resign', id: g.id });
+  await g.white.wait((x) => x.t === 'end', 10_000);
+  a.close(); b.close();
+  await one.close({ crash: true, keep: true });
+
+  const two = await boot({ ...shared, dbName: one.dbName });
+  assert.equal(two.recovered.settled, 1);
+  assert.equal(two.recovered.holds, 0);
+  const winner = await two.ctx.db.users.findOne({ _id: g.white.user.id });
+  assert.equal(winner.balance, 1000 - 500 + 970);
+  await checkBooks(two.ctx.db);
+  await two.close();
 });
 
 test('restart: unfinished games are voided and every open stake is returned', async () => {

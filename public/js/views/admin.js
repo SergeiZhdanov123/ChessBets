@@ -32,6 +32,8 @@ export default function admin(el, [userId]) {
         <table class="table"><tbody>${Object.entries(HOUSE_LABEL).map(([k, label]) => `<tr><td>${label}</td><td class="r num">${house[k]?.n || 0}</td><td class="r num strong">${money(house[k]?.total || 0, { sign: true })}</td></tr>`).join('')}${other.n ? `<tr><td>Other</td><td class="r num">${other.n}</td><td class="r num strong">${money(other.total, { sign: true })}</td></tr>` : ''}</tbody></table>
       </div>
 
+      ${o.unsettled.length ? `<div class="callout red" style="margin-bottom:18px"><b>${o.unsettled.length} finished game${o.unsettled.length === 1 ? '' : 's'} not settled yet.</b> The stakes are held and the server retries every 30 seconds; nothing needs doing unless this stays. ${o.unsettled.map((g) => `<a class="rowlink num" href="/game/${esc(g.id)}">${esc(g.white_name)} v ${esc(g.black_name)} (${esc(g.final_status === 'aborted' ? 'aborted' : g.result)}, ${money(g.stake)})</a>`).join(', ')}</div>` : ''}
+
       ${pay.mode === 'crypto' ? paymentsHtml(pay) : ''}
 
       <div class="section-head"><h2>${icon('search')}Find a player</h2></div>
@@ -117,11 +119,11 @@ function paymentsHtml(p) {
     ${p.withdrawals.length ? `<div class="table-wrap"><table class="table"><thead><tr><th>#</th><th>Player</th><th class="r">Send</th><th>To</th><th>Requested</th><th></th></tr></thead><tbody>
       ${p.withdrawals.map((w) => `<tr>
         <td class="num">${w.id}</td>
-        <td><a class="rowlink strong" href="/admin/${w.user_id}">${esc(w.username || '?')}</a>${w.status === 'review' || w.user_review ? ' <span class="status wait">review</span>' : ''}</td>
+        <td><a class="rowlink strong" href="/admin/${w.user_id}">${esc(w.username || '?')}</a>${w.user_status === 'suspended' ? ' <span class="status bad">suspended</span>' : w.status === 'review' || w.user_review ? ' <span class="status wait">review</span>' : ''}</td>
         <td class="r num"><b>${money(w.net)}</b><div class="dim">${w.coin_now ? `about ${esc(w.coin_now)} ${esc(w.label)}` : esc(w.label)}</div></td>
         <td style="white-space:normal;max-width:260px"><div class="dim">${esc(w.network || '')}</div><span class="num" style="word-break:break-all">${esc(w.address)}</span> <button class="btn btn-ghost btn-sm" data-copy="${esc(w.address)}">${icon('copy')}</button></td>
         <td>${dateTime(w.created_at)}</td>
-        <td style="min-width:260px"><div style="display:flex;gap:6px"><input class="input" data-txid="${w.id}" placeholder="txid after sending" style="height:36px"><button class="btn btn-green btn-sm" data-sent="${w.id}">Mark sent</button><button class="btn btn-ghost btn-sm" data-decline="${w.id}" data-amt="${w.amount}" data-user="${esc(w.username || '')}">Decline</button></div></td>
+        <td style="min-width:260px"><div style="display:flex;gap:6px"><input class="input" data-txid="${w.id}" placeholder="txid after sending" style="height:36px"><button class="btn btn-green btn-sm" data-sent="${w.id}">Mark sent</button><button class="btn btn-ghost btn-sm" data-decline="${w.id}" data-amt="${w.amount}" data-user="${esc(w.username || '')}" data-suspended="${w.user_status === 'suspended' ? 1 : ''}">${w.user_status === 'suspended' ? 'Forfeit' : 'Decline'}</button></div></td>
       </tr>`).join('')}
     </tbody></table></div>` : '<div class="empty card" style="margin-bottom:18px">Nothing to send.</div>'}
 
@@ -156,7 +158,10 @@ function wirePayments(box, reload) {
     catch (e) { toast(e.message, { kind: 'bad' }); b.disabled = false; }
   }));
   box.querySelectorAll('[data-decline]').forEach((b) => (b.onclick = async () => {
-    if (!(await confirmBox('Decline this withdrawal?', `${money(+b.dataset.amt)}, fee included, goes back to ${b.dataset.user}'s balance.`, { ok: 'Decline', danger: true }))) return;
+    const ok = b.dataset.suspended
+      ? await confirmBox('Forfeit this withdrawal?', `${b.dataset.user}'s account is suspended. Only forfeit if you have NOT sent these coins; if you already sent them, paste the txid and press Mark sent instead. ${money(+b.dataset.amt)} goes to the house.`, { ok: 'Forfeit', danger: true })
+      : await confirmBox('Decline this withdrawal?', `${money(+b.dataset.amt)}, fee included, goes back to ${b.dataset.user}'s balance.`, { ok: 'Decline', danger: true });
+    if (!ok) return;
     try { await api(`/api/admin/withdrawals/${b.dataset.decline}/reject`, { note: 'Declined by staff. Contact support for details.' }); reload(); }
     catch (e) { toast(e.message, { kind: 'bad' }); }
   }));

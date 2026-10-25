@@ -98,8 +98,8 @@ export function createEnforcement(ctx) {
         await money.userEntry(userId, -bal, 'forfeit', `suspension:${userId}`, 'Balance forfeited on suspension');
         await money.house(bal, 'forfeit', `suspension:${userId}`);
       }
-      await db.users.update({ _id: userId }, { $inc: { forfeited: bal } });
-      await ctx.wallet.forfeitHeld(userId);
+      const withdrawals = await ctx.wallet.forfeitHeld(userId);
+      await db.users.update({ _id: userId }, { $inc: { forfeited: bal + withdrawals } });
       await db.scheduled_actions.updateMany({ user_id: userId, status: 'pending' }, { $set: { status: 'superseded', done_at: now() } });
       await event(userId, gameId, 'suspended', reason);
       if (refund) await refundVictims(userId);

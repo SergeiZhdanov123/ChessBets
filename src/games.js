@@ -6,6 +6,7 @@ import { humanPayouts } from './money.js';
 const UCI = /^[a-h][1-8][a-h][1-8][qrbn]?$/;
 const other = (c) => (c === 'w' ? 'b' : 'w');
 const newId = () => crypto.randomBytes(6).toString('base64url');
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Can this side still deliver mate with what is left on the board?
 function canMate(chess, color) {
@@ -256,6 +257,9 @@ export function createGames(ctx) {
   const { db, money, hub } = ctx;
   const live = new Map();
   const byUser = new Map(); // userId -> gameId
+  // Games whose money couldn't be moved yet, by id. The same records are
+  // in the database as status 'unsettled', so they survive a restart.
+  const unsettled = new Map();
 
   const mgr = {
     hub,
@@ -283,21 +287,71 @@ export function createGames(ctx) {
     },
 
     // Money moves for a finished or aborted game, and the final game record,
-    // in one transaction.
+    // in one transaction. If that keeps failing, the game is parked as
+    // 'unsettled' and retried until it goes through.
     async finish(g, fairplay) {
-      try {
-        g.settlement = await g.queue(() => db.tx(async () => {
-          const out = await mgr.settle(g, fairplay);
-          await db.games.replace({ _id: g.id }, mgr.doc(g, out), { upsert: true });
-          return out;
-        }));
-      } catch (err) {
-        console.error('settlement failed', g.id, err.message);
-        g.settlement = null;
-      }
+      const rec = { ...mgr.doc(g), final_status: g.status, fairplay_color: fairplay?.color ?? null };
+      g.settlement = await g.queue(() => mgr.trySettle(rec));
       g.broadcast((c) => ({ t: 'end', id: g.id, game: g.snapshot(c.userId) }));
       await mgr.onEnded(g);
     },
+
+    async trySettle(rec, waits = [0, 500, 2000]) {
+      let last;
+      for (const ms of waits) {
+        if (ms) await sleep(ms);
+        try { return await mgr.settleRecord(rec); } catch (err) { last = err; }
+      }
+      console.error('settlement failed, will retry', rec._id, last.message);
+      unsettled.set(rec._id, rec);
+      const { _id, ...fields } = rec;
+      await db.games.update({ _id, status: 'active' }, { $set: { ...fields, status: 'unsettled' } })
+        .catch((err) => console.error('could not record unsettled game', _id, err.message));
+      return null;
+    },
+
+    // Settles a game from its stored form: the result, the two players and
+    // their holds. Safe to run again: a game already settled is left alone.
+    settleRecord(rec) {
+      const id = rec._id ?? rec.id;
+      const g = {
+        id, kind: rec.kind, stake: rec.stake, status: rec.final_status, result: rec.result,
+        side: (c) => (c === 'w' ? { userId: rec.white_id, holdId: rec.white_hold } : { userId: rec.black_id, holdId: rec.black_hold }),
+      };
+      return db.tx(async () => {
+        const cur = await db.games.findOne({ _id: id }, { projection: { status: 1, rake: 1, payout_white: 1, payout_black: 1 } });
+        if (cur && cur.status !== 'active' && cur.status !== 'unsettled') return { rake: cur.rake, w: cur.payout_white, b: cur.payout_black };
+        const out = await mgr.settle(g, rec.fairplay_color ? { color: rec.fairplay_color } : null);
+        const { _id, id: _, final_status, fairplay_color, ...doc } = rec;
+        await db.games.replace({ _id: id }, { ...doc, status: final_status, rake: out.rake, payout_white: out.w, payout_black: out.b }, { upsert: true });
+        return out;
+      });
+    },
+
+    // Every unsettled game, from memory and from the database, gets another
+    // try. Runs on a timer and once at startup.
+    async retryUnsettled() {
+      const recs = new Map(unsettled);
+      for (const d of await db.games.find({ status: 'unsettled' })) if (!recs.has(d.id)) recs.set(d.id, d);
+      let n = 0;
+      for (const [id, rec] of recs) {
+        if (ctx.closed) break;
+        let out;
+        try { out = await mgr.settleRecord(rec); } catch (err) { console.error('settlement retry failed', id, err.message); continue; }
+        unsettled.delete(id);
+        n++;
+        hub.pushBalance(rec.white_id);
+        hub.pushBalance(rec.black_id);
+        const g = live.get(id);
+        if (g) {
+          g.settlement = out;
+          g.broadcast((c) => ({ t: 'end', id: g.id, game: g.snapshot(c.userId) }));
+        }
+        if (rec.final_status === 'finished') hub.feed(feedShape({ id, ...rec, payout_white: out.w, payout_black: out.b }));
+      }
+      return n;
+    },
+    unsettledIds: () => [...unsettled.keys()],
 
     async settle(g, fairplay) {
       const ref = `game:${g.id}`;
@@ -342,6 +396,7 @@ export function createGames(ctx) {
         winner_id: winner ? g.side(winner).userId : null,
         moves: g.moves, fen: g.chess.fen(), ply: g.ply,
         rake: settlement?.rake ?? 0, payout_white: settlement?.w ?? 0, payout_black: settlement?.b ?? 0,
+        white_hold: g.white.holdId ?? null, black_hold: g.black.holdId ?? null,
         white_ip: g.white.ip ?? null, black_ip: g.black.ip ?? null, white_device: g.white.device ?? null, black_device: g.black.device ?? null,
         created_at: g.createdAt, ended_at: g.endedAt ?? null,
       };
@@ -374,22 +429,28 @@ export function createGames(ctx) {
       await ctx.enforcement?.gameEnded(g).catch((err) => console.error('game checks failed', g.id, err.message));
     },
 
-    // After a restart nothing in memory survived. Games that were in progress
-    // are voided and every open stake goes back to its owner.
+    // After a restart nothing in memory survived. Games that ended but
+    // weren't settled are settled now; games that were still in progress
+    // are voided, and every other open stake goes back to its owner.
     async recover() {
+      const settled = await mgr.retryUnsettled();
+      const stuck = (await db.games.find({ status: 'unsettled' }, { projection: { _id: 1 } })).map((d) => `game:${d.id}`);
       const stale = await db.games.updateMany({ status: 'active' }, { $set: { status: 'aborted', reason: 'server-restart', ended_at: Date.now() } });
       let n = 0;
-      for (const h of await db.holds.find({ status: 'held' }, { projection: { _id: 1 } })) {
+      for (const h of await db.holds.find({ status: 'held', ref: { $nin: stuck } }, { projection: { _id: 1 } })) {
         if (await money.release(h.id, 'stake_return')) n++;
       }
-      return { games: stale.modifiedCount, holds: n };
+      return { games: stale.modifiedCount, holds: n, settled, unsettled: stuck.length };
     },
 
     shutdown() {
       ctx.closed = true;
+      clearInterval(retryTimer);
       for (const g of live.values()) for (const t of Object.values(g.timers)) clearTimeout(t);
     },
   };
+  const retryTimer = setInterval(() => ctx.track(mgr.retryUnsettled().catch((err) => console.error('settlement retry', err.message))), config.settleRetryMs);
+  retryTimer.unref?.();
   return mgr;
 }
 

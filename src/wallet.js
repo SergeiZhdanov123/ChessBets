@@ -39,6 +39,10 @@ const DAY = 86_400_000;
 // long, paid or not. Otherwise a player who sends the same amount again
 // (from their wallet history, say) could pay into someone else's request.
 const AMOUNT_RESERVED_MS = 7 * DAY;
+// An unconfirmed bitcoin payment that stops showing up for this long was
+// replaced or dropped by the network and is marked that way. If it comes
+// back, it picks up where it was.
+const BTC_GONE_MS = 30 * 60_000;
 const EXPLORERS = {
   main: ['https://mempool.space/api', 'https://blockstream.info/api'],
   test: ['https://mempool.space/testnet/api', 'https://blockstream.info/testnet/api'],
@@ -241,7 +245,8 @@ export function createWallet(ctx) {
   }
 
   const scanBtc = (row, tip) => once(`btc|${row.address}`, async () => {
-    for (const t of await btcApi.received(row.address)) {
+    const seen = await btcApi.received(row.address);
+    for (const t of seen) {
       const id = `btc:${t.txid}:${row.address}`;
       const known = await db.payments.findOne({ _id: id });
       if (known && SETTLED.includes(known.status)) continue;
@@ -249,12 +254,34 @@ export function createWallet(ctx) {
       if (conf < config.btcConfirmations) await btcSeen(row, t, id, known, conf);
       else await btcCredit(row, t, id, known);
     }
+    await btcGone(row, new Set(seen.map((t) => t.txid)));
   });
+
+  // Payments shown as on their way that the explorer no longer lists.
+  async function btcGone(row, present) {
+    const t = now();
+    for (const d of await db.deposits.find({ kind: 'chain', address: row.address, status: 'confirming' })) {
+      if (present.has(d.txid)) continue;
+      if (!d.missing_since) { await db.deposits.update({ _id: d.id, status: 'confirming' }, { $set: { missing_since: t } }); continue; }
+      if (t - d.missing_since < BTC_GONE_MS) continue;
+      const r = await db.deposits.update({ _id: d.id, status: 'confirming' }, {
+        $set: { status: 'dropped', note: 'The bitcoin network dropped or replaced this payment before it confirmed. Nothing was credited.' },
+      });
+      if (!r.modifiedCount) continue;
+      await db.payments.update({ _id: `btc:${d.txid}:${row.address}`, status: 'pending' }, { $set: { status: 'dropped', updated_at: t } });
+      hub.toUser(row.user_id, { t: 'wallet', deposit: await depositRow(d.id) });
+    }
+  }
 
   // Not confirmed yet: show it to the player as on its way.
   async function btcSeen(row, t, id, known, conf) {
     if (known?.deposit_id) {
-      const r = await db.deposits.update({ _id: known.deposit_id, confirmations: { $ne: conf } }, { $set: { confirmations: conf } });
+      // A payment marked dropped that the network brought back is live again.
+      const r = await db.deposits.update(
+        { _id: known.deposit_id, $or: [{ confirmations: { $ne: conf } }, { status: 'dropped' }, { missing_since: { $ne: null } }] },
+        { $set: { confirmations: conf, status: 'confirming', missing_since: null, note: null } },
+      );
+      if (known.status === 'dropped') await db.payments.update({ _id: id }, { $set: { status: 'pending', updated_at: now() } });
       if (r.modifiedCount) hub.toUser(row.user_id, { t: 'wallet', deposit: await depositRow(known.deposit_id) });
       return;
     }
@@ -462,7 +489,9 @@ export function createWallet(ctx) {
     const w = await db.withdrawals.findOne({ _id: id });
     if (!w || (w.status !== 'processing' && w.status !== 'review')) return false;
     const u = await db.users.findOne({ _id: w.user_id }, { projection: { status: 1 } });
-    if (u.status !== 'active') return false;
+    // Staff recording coins they already sent is always allowed: the money
+    // is gone whatever happened to the account since.
+    if (u.status !== 'active' && !(live && sentTxid)) return false;
     const done = await db.tx(async () => {
       const r = await db.withdrawals.update(
         { _id: id, status: { $in: ['processing', 'review'] } },
@@ -477,16 +506,25 @@ export function createWallet(ctx) {
   }
 
   // Staff turn a withdrawal down: the full amount, fee included, goes back.
+  // For a suspended account it is forfeited instead, like the rest of the
+  // balance (and comes back if the account is reinstated with its balance).
   async function rejectWithdraw(id, note) {
     const w = await db.withdrawals.findOne({ _id: id });
     if (!w) return false;
     const done = await db.tx(async () => {
+      const u = await db.users.findOne({ _id: w.user_id }, { projection: { status: 1 } });
+      const suspended = u?.status === 'suspended';
       const r = await db.withdrawals.update(
         { _id: id, status: { $in: ['processing', 'review'] } },
-        { $set: { status: 'rejected', note: note || 'Declined by staff', completed_at: now() } },
+        { $set: { status: 'rejected', note: suspended ? 'Account suspended' : note || 'Declined by staff', completed_at: now() } },
       );
       if (!r.modifiedCount) return false;
-      await money.userEntry(w.user_id, w.amount, 'withdrawal_refund', `withdrawal:${id}`, note || 'Withdrawal declined');
+      if (suspended) {
+        await money.house(w.amount, 'forfeit', `withdrawal:${id}`);
+        await db.users.update({ _id: w.user_id }, { $inc: { forfeited: w.amount } });
+      } else {
+        await money.userEntry(w.user_id, w.amount, 'withdrawal_refund', `withdrawal:${id}`, note || 'Withdrawal declined');
+      }
       return true;
     });
     if (done) {
@@ -497,7 +535,10 @@ export function createWallet(ctx) {
   }
 
   // Held withdrawals of an account that was cleared go out; for a suspended
-  // account they are forfeited.
+  // account they are forfeited. With real payments, open withdrawals of a
+  // suspended account are left for staff instead: the coins may already
+  // have been sent without being marked, so staff either mark it sent or
+  // decline it, which forfeits it. Returns the amount forfeited now.
   async function releaseHeld(userId) {
     for (const w of await db.withdrawals.find({ user_id: userId, status: 'review' }, { projection: { _id: 1 } })) {
       await db.withdrawals.update({ _id: w.id, status: 'review' }, { $set: { status: 'processing' } });
@@ -505,10 +546,17 @@ export function createWallet(ctx) {
     }
   }
   async function forfeitHeld(userId) {
+    let total = 0;
     for (const w of await db.withdrawals.find({ user_id: userId, status: { $in: ['review', 'processing'] } })) {
+      if (live) {
+        await db.withdrawals.update({ _id: w.id }, { $set: { note: 'Account suspended' } });
+        continue;
+      }
       await db.withdrawals.update({ _id: w.id }, { $set: { status: 'rejected', note: 'Account suspended', completed_at: now() } });
       await money.house(w.amount, 'forfeit', `withdrawal:${w.id}`);
+      total += w.amount;
     }
+    return total;
   }
 
   // ---------------------------------------------------------------- staff

@@ -21,6 +21,8 @@ const { server, ctx, recovered } = started;
 if (recovered.games || recovered.holds) {
   console.log(`Recovered after restart: voided ${recovered.games} unfinished game(s), returned ${recovered.holds} open stake(s).`);
 }
+if (recovered.settled) console.log(`Settled ${recovered.settled} game(s) that had ended before the restart.`);
+if (recovered.unsettled) console.error(`${recovered.unsettled} finished game(s) still can't be settled; retrying every ${config.settleRetryMs / 1000}s. See Admin.`);
 
 ctx.analysisPool.whenReady(20_000).then((ok) => {
   if (ok) console.log(`Stockfish ready (${config.stockfishPath})`);
