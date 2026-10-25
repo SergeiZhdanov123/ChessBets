@@ -1,7 +1,7 @@
 import { config } from './config.js';
 
 // Everything that changes an account's standing lives here: review holds,
-// suspensions, refunds to people who lost to a cheater, and the delayed
+// suspensions, refund requests for people who lost to a cheater, and the delayed
 // action that follows a win against a house bot.
 export function createEnforcement(ctx) {
   const { db, money, hub } = ctx;
@@ -26,26 +26,51 @@ export function createEnforcement(ctx) {
     await ctx.wallet.releaseHeld(userId);
   }
 
-  // Refund the stake of everyone this account beat at human chess in the
-  // last week. Runs inside the suspension's transaction; returns who was
-  // paid so they can be told once it commits.
+  // Everyone this account beat at human chess in the last week may be owed
+  // their stake back. Nothing is paid automatically: each game becomes a
+  // refund request that staff approve or decline in the admin page. Runs
+  // inside the suspension's transaction.
   async function refundVictims(cheaterId) {
     const games = await db.games.find(
       { kind: 'human', status: 'finished', winner_id: cheaterId, ended_at: { $gt: now() - 7 * 86_400_000 } },
       { projection: { white_id: 1, black_id: 1, stake: 1 } },
     );
-    const paid = [];
+    let n = 0;
     for (const g of games) {
       const victim = g.white_id === cheaterId ? g.black_id : g.white_id;
       const ref = `refund:${g.id}:${victim}`;
+      if (await db.refunds.findOne({ ref }, { projection: { _id: 1 } })) continue;
       if (await db.ledger.findOne({ ref }, { projection: { _id: 1 } })) continue;
       const v = await db.users.findOne({ _id: victim }, { projection: { status: 1 } });
       if (!v || v.status !== 'active') continue;
-      await money.userEntry(victim, g.stake, 'fairplay_refund', ref, 'Opponent was removed for fair play');
-      await money.house(-g.stake, 'fairplay_refund', ref);
-      paid.push({ victim, amount: g.stake, game: g.id });
+      await db.refunds.insert({
+        _id: await db.nextId('refunds'), ref, user_id: victim, cheater_id: cheaterId, game_id: g.id, amount: g.stake,
+        status: 'pending', created_at: now(), decided_at: null, decided_by: null, note: null,
+      });
+      n++;
     }
-    return paid;
+    return n;
+  }
+
+  // Staff decision on a refund request. Approving pays the stake back once.
+  async function decideRefund(id, approve, staffId, note = null) {
+    const r = await db.tx(async () => {
+      const claim = await db.refunds.modify(
+        { _id: id, status: 'pending' },
+        { $set: { status: approve ? 'paid' : 'declined', decided_at: now(), decided_by: staffId, note } },
+      );
+      if (!claim) return null;
+      if (approve && !(await db.ledger.findOne({ ref: claim.ref }, { projection: { _id: 1 } }))) {
+        await money.userEntry(claim.user_id, claim.amount, 'fairplay_refund', claim.ref, 'Opponent was removed for fair play');
+        await money.house(-claim.amount, 'fairplay_refund', claim.ref);
+      }
+      return claim;
+    });
+    if (r && approve) {
+      hub.toUser(r.user_id, { t: 'notice', kind: 'refund', amount: r.amount, game: r.game_id });
+      hub.pushBalance(r.user_id);
+    }
+    return r;
   }
 
   async function suspend(userId, reason, gameId = null, { refund = true } = {}) {
@@ -62,7 +87,7 @@ export function createEnforcement(ctx) {
       else await g.end({ status: 'aborted', reason: 'fair-play' });
     }
 
-    const paid = await db.tx(async () => {
+    const done = await db.tx(async () => {
       const cur = await db.users.modify(
         { _id: userId, status: { $ne: 'suspended' } },
         { $set: { status: 'suspended', suspended_at: now(), suspend_reason: reason } },
@@ -78,13 +103,10 @@ export function createEnforcement(ctx) {
       await ctx.wallet.forfeitHeld(userId);
       await db.scheduled_actions.updateMany({ user_id: userId, status: 'pending' }, { $set: { status: 'superseded', done_at: now() } });
       await event(userId, gameId, 'suspended', reason);
-      return refund ? refundVictims(userId) : [];
+      if (refund) await refundVictims(userId);
+      return true;
     });
-    if (!paid) return false;
-    for (const p of paid) {
-      hub.toUser(p.victim, { t: 'notice', kind: 'refund', amount: p.amount, game: p.game });
-      hub.pushBalance(p.victim);
-    }
+    if (!done) return false;
     hub.toUser(userId, { t: 'suspended' });
     hub.pushBalance(userId);
     return true;
@@ -216,5 +238,5 @@ export function createEnforcement(ctx) {
   const timer = setInterval(() => tick().catch((e) => console.error('scheduled actions', e.message)), config.scheduleTickMs);
   timer.unref?.();
 
-  return { event, review, clearReview, suspend, reinstate, intervene, schedule, tick, gameEnded, seenDevice, refundVictims, stop: () => clearInterval(timer) };
+  return { event, review, clearReview, suspend, reinstate, intervene, schedule, tick, gameEnded, seenDevice, refundVictims, decideRefund, stop: () => clearInterval(timer) };
 }

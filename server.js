@@ -22,6 +22,11 @@ if (recovered.games || recovered.holds) {
   console.log(`Recovered after restart: voided ${recovered.games} unfinished game(s), returned ${recovered.holds} open stake(s).`);
 }
 
+ctx.botPool.whenReady(20_000).then((ok) => {
+  if (ok) console.log(`Stockfish ready (${config.stockfishPath})`);
+  else console.error(`Stockfish did not start from "${config.stockfishPath}". Bot games are refused until it does. Run npm install, or set STOCKFISH_PATH.`);
+});
+
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') console.error(`Port ${config.port} is already in use. Start with PORT=<other> node server.js`);
   else console.error(err);

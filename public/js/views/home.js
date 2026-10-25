@@ -24,7 +24,7 @@ export default function home(el) {
       </a>
       <a class="banner" href="/fair-play">
         <h3>Fair play, checked every move</h3>
-        <p>Every game is analysed. Cheaters lose their balance and the players they beat get their stake back.</p>
+        <p>Every game is analysed. Cheaters lose their balance, and the players they beat can have their wager refunded after review.</p>
         <span class="btn btn-gray btn-sm">How it works</span>
         <div class="banner-art shield">${icon('shield', 'stroke-width="1.4"')}</div>
       </a>

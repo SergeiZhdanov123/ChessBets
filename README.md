@@ -10,7 +10,7 @@ node server.js          # http://localhost:3000
 Needs:
 
 - Node 22.13+.
-- A native Stockfish on the PATH (`brew install stockfish`). Set `STOCKFISH_PATH` if it lives elsewhere.
+- Stockfish. On Linux x86-64 with none installed, `npm install` downloads the official Stockfish 19 build into `bin/stockfish` (checksum pinned in `scripts/install-stockfish.js`) and the install fails if that doesn't work. On a Mac, `brew install stockfish`. `STOCKFISH_PATH` overrides both.
 - A MongoDB connection string in `MONGODB_URI`. Locally, put it in a `.env` file next to `server.js`:
 
 ```
@@ -24,7 +24,7 @@ MongoDB has to be a replica set, because money moves use transactions. Every Atl
 
 ### Render
 
-Set `MONGODB_URI` (and `MONGODB_DB` if you want a name other than `chessbets`) under Environment. Nothing needs a disk.
+Set `MONGODB_URI` (and `MONGODB_DB` if you want a name other than `chessbets`) under Environment. Nothing needs a disk. The build command must run `npm install` (or `npm ci`), which is what puts Stockfish on the instance; without an engine the server refuses new bot games instead of letting a bot sit on its clock.
 
 In Atlas, under Network Access, allow `0.0.0.0/0`. Render's free instances don't have fixed outbound IPs.
 
@@ -56,7 +56,7 @@ Real-money wagering is regulated almost everywhere. Get legal advice before you 
 
 **Play a Human.** Six queues: 3 or 10 minutes, $1, $5 or $10, no increment. No ratings. Every second the matchmaker shuffles each queue and pairs people at random. It prefers opponents you haven't met recently. The only hard block is two accounts in the same browser. Games between accounts that share a device history or an IP are allowed but logged for fair-play review (set `BLOCK_SAME_IP=1` to refuse same-IP pairings).
 
-**Play a Bot.** Hikaru, Magnus and Kasparov. All three are full-strength Stockfish 19 (Skill 20, no strength limit, multiple threads, 0.7 to 4.2 s a move). What differs between them is the opening repertoire, the pace and the presentation. The site calls them bots "built to play in the style of" each player, with a line saying they are not affiliated with or endorsed by the players. 30 minutes a side. Wagers from $1 to $100. A win pays 2x and there is no rake. Bots never offer or accept draws: the engine sees the full move history (so it knows about repetitions), and if its choice would end the game in a draw it searches again over every non-drawing move and plays the best of those unless that leaves it clearly lost. A draw the player forces anyway returns the wager.
+**Play a Bot.** Hikaru, Magnus and Kasparov. All three are full-strength Stockfish 19 (Skill 20, no strength limit, multiple threads, 0.4 to 2.75 s a move, and a search stops early once it reaches depth 22 (`BOT_STOP_DEPTH`); a position with one legal move is played at once). What differs between them is the opening repertoire, the pace and the presentation. The site calls them bots "built to play in the style of" each player, with a line saying they are not affiliated with or endorsed by the players. 30 minutes a side. Wagers from $1 to $100. A win pays 2x and there is no rake. Bots never offer or accept draws: the engine sees the full move history (so it knows about repetitions), and if its choice would end the game in a draw it searches again over every non-drawing move and plays the best of those unless that leaves it clearly lost. A draw the player forces anyway returns the wager. If the engine fails three times in a row during a game, the game is called off and the wager returned, so a broken engine never hands the player a win on time.
 
 **Chat.** Players in a human game can type messages (up to 200 characters, 3 per 5 seconds) or use quick messages. Only the two players receive them. Your messages are green on the right; your opponent's are blue on the left, with a mute toggle.
 
@@ -64,7 +64,7 @@ Real-money wagering is regulated almost everywhere. Get legal advice before you 
 
 | | |
 |---|---|
-| Rake | 4% of the pot on every human game that is played, draws included. Aborted games (no first move) are refunded in full. |
+| Rake | 3% of the pot on every human game that is played, draws included. Aborted games (no first move) are refunded in full. |
 | $1 / $5 / $10 win | $1.92 / $9.60 / $19.20 |
 | Draw returns | $0.96 / $4.80 / $9.60 per player |
 | Withdrawal fee | 5%, minimum withdrawal $5 |
@@ -101,7 +101,7 @@ All of this lives in `src/anticheat.js`. The rule it follows: strong play alone 
   - Evidence 4 or more: review. Withdrawals are held and the account shows up in Admin.
   - Evidence 8 or more over at least 3 games: automatic suspension.
 - **Live stop.** If the evidence crosses the line during a game, the game ends at once. The honest player gets the whole pot with no rake, and the cheater is suspended.
-- **Victim refunds.** On any suspension, everyone the account beat in the last 7 days gets their stake back.
+- **Victim refunds.** On any suspension, each human game the account won in the last 7 days becomes a refund request. Nothing is paid until staff approve it under Admin > Fair-play refunds to approve.
 - **Prevention:**
   - Live games can't be spectated.
   - No evaluations are ever shown.

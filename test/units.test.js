@@ -9,10 +9,10 @@ import { cleanChat } from '../src/hub.js';
 import { COINS, toCoin } from '../src/wallet.js';
 import { parseInfo, scoreCp } from '../src/engine.js';
 
-test('human payouts: 4% rake on the pot, exact cents for every queue', () => {
-  assert.deepEqual(humanPayouts(100), { pot: 200, rake: 8, win: 192, draw: 96 });
-  assert.deepEqual(humanPayouts(500), { pot: 1000, rake: 40, win: 960, draw: 480 });
-  assert.deepEqual(humanPayouts(1000), { pot: 2000, rake: 80, win: 1920, draw: 960 });
+test('human payouts: 3% rake on the pot, exact cents for every queue', () => {
+  assert.deepEqual(humanPayouts(100), { pot: 200, rake: 6, win: 194, draw: 97 });
+  assert.deepEqual(humanPayouts(500), { pot: 1000, rake: 30, win: 970, draw: 485 });
+  assert.deepEqual(humanPayouts(1000), { pot: 2000, rake: 60, win: 1940, draw: 970 });
   for (const s of [100, 500, 1000]) {
     const p = humanPayouts(s);
     assert.equal(p.win + p.rake, p.pot);
@@ -141,7 +141,7 @@ test('book moves follow the game prefix and the bot color', () => {
 test('bot think time shrinks with the clock', () => {
   const fast = thinkTime('kasparov', { ply: 30, clockMs: 30_000 }, 1, () => 0.5);
   const slow = thinkTime('kasparov', { ply: 30, clockMs: 25 * 60_000 }, 1, () => 0.5);
-  assert.ok(fast <= 400 && slow > 2000);
+  assert.ok(fast <= 400 && slow > 1500);
 });
 
 test('coin conversion and address formats', () => {

@@ -7,7 +7,8 @@
     "dev": "node --watch server.js",
     "test": "node --test --test-concurrency=1 'test/*.test.js'",
     "test:e2e": "node test-e2e/run.js",
-    "make-admin": "node scripts/make-admin.js"
+    "make-admin": "node scripts/make-admin.js",
+    "postinstall": "node scripts/install-stockfish.js"
   },
   "license": "UNLICENSED",
   "description": "Wagered chess, paper-money edition",
@@ -18,7 +19,9 @@
     "@scure/bip32": "2.4.0",
     "chess.js": "^1.4.0",
     "express": "^5.3.0",
+    "ffmpeg-static": "^5.3.0",
     "mongodb": "^6.21.0",
+    "playwright": "^1.64.1",
     "qrcode": "^1.5.4",
     "ws": "^8.22.0"
   },

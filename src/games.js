@@ -291,6 +291,8 @@ export function createGames(ctx) {
 
     async createBot(user, botId, stake, colorPref, net = {}) {
       if (!BOTS[botId]) throw Object.assign(new Error('Unknown bot'), { status: 400 });
+      // Right after a restart the engine may still be starting; give it a moment.
+      if (!ctx.botPool.healthy && !(await ctx.botPool.whenReady?.(8000))) throw Object.assign(new Error('The bots are offline for a moment. Try again shortly.'), { status: 503 });
       const color = colorPref === 'w' || colorPref === 'b' ? colorPref : Math.random() < 0.5 ? 'w' : 'b';
       const id = newId();
       const holdId = await money.hold(user.id, stake, 'game', `game:${id}`);
@@ -430,15 +432,28 @@ export function createGames(ctx) {
         g.timers.bot = setTimeout(() => play(mv.from + mv.to + (mv.promotion || '')), delay);
         return;
       }
+      // Only one legal move: no need to think about it.
+      const legal = g.chess.moves({ verbose: true });
+      if (legal.length === 1) {
+        const m = legal[0];
+        g.timers.bot = setTimeout(() => play(m.from + m.to + (m.promotion || '')), Math.round(300 * config.botMoveScale));
+        return;
+      }
       const movetime = thinkTime(botId, { ply, clockMs: g.remaining(color) }, config.botMoveScale);
       const history = g.moves.map((m) => m.u);
-      mgr.botMove(history, movetime, drawingMoves(g.chess), g.chess.moves().length).then((uci) => {
+      mgr.botMove(history, movetime, drawingMoves(g.chess), legal.length).then((uci) => {
+        if (!uci) throw new Error('engine returned no move');
+        g.botFailures = 0;
         const wait = Math.max(0, Math.round(150 * config.botMoveScale) - (Date.now() - started));
-        g.timers.bot = setTimeout(() => uci && play(uci), wait);
+        g.timers.bot = setTimeout(() => play(uci), wait);
       }).catch((err) => {
-        if (ctx.closed) return;
-        console.error('bot search failed', g.id, err.message);
-        setTimeout(() => g.status === 'active' && g.ply === ply && mgr.scheduleBot(g), 500);
+        if (ctx.closed || g.status !== 'active' || g.ply !== ply) return;
+        g.botFailures = (g.botFailures || 0) + 1;
+        console.error('bot search failed', g.id, `attempt ${g.botFailures}`, err.message);
+        // The engine is down. Rather than let the bot's clock run out, call
+        // the game off and give the player their wager back.
+        if (g.botFailures >= 3) { g.end({ status: 'aborted', reason: 'bot-unavailable' }); return; }
+        g.timers.bot = setTimeout(() => g.status === 'active' && g.ply === ply && mgr.scheduleBot(g), 1000);
       });
     },
 
@@ -447,13 +462,15 @@ export function createGames(ctx) {
     // those unless it leaves the bot clearly lost (a loss pays out double,
     // which is worse for the house than a draw).
     async botMove(history, movetime, drawing, legalCount) {
-      const first = await ctx.botPool.search({ moves: history, movetime });
+      // A timed search that stops early once it is this deep: at depth 22
+      // Stockfish is far beyond any human, and the extra time buys nothing.
+      const first = await ctx.botPool.search({ moves: history, movetime, stopDepth: config.botStopDepth });
       if (!first.best || !drawing.has(first.best)) return first.best;
       if (drawing.size >= legalCount) return first.best; // every move draws
       const c = new Chess();
       for (const u of history) c.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u[4] });
       const others = c.moves({ verbose: true }).map((m) => m.from + m.to + (m.promotion || '')).filter((u) => !drawing.has(u));
-      const second = await ctx.botPool.search({ moves: history, movetime: Math.max(200, movetime / 2), searchmoves: others });
+      const second = await ctx.botPool.search({ moves: history, movetime: Math.max(200, movetime / 2), searchmoves: others, stopDepth: config.botStopDepth });
       const score = second.lines[0] ? scoreCp(second.lines[0]) : 0;
       return second.best && score > -300 ? second.best : first.best;
     },

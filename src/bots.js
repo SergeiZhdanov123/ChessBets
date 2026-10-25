@@ -8,7 +8,7 @@ export const BOTS = {
     fullName: 'Hikaru Nakamura',
     blurb: 'Fast hands and a nose for tactics. Moves quickly, rarely lets a loose piece go.',
     style: 'Speed and tactics',
-    think: [700, 2200],
+    think: [400, 1200],
     book: {
       w: [
         'e4 e5 Nf3 Nc6 Bc4 Bc5 c3 Nf6 d3',
@@ -41,7 +41,7 @@ export const BOTS = {
     fullName: 'Magnus Carlsen',
     blurb: 'Takes a small edge and keeps squeezing. Patient in quiet positions and lethal in endgames.',
     style: 'Positional pressure',
-    think: [1400, 3600],
+    think: [700, 1800],
     book: {
       w: [
         'e4 e5 Nf3 Nc6 Bb5 a6 Ba4 Nf6 O-O Be7 Re1 b5 Bb3 d6 c3',
@@ -72,7 +72,7 @@ export const BOTS = {
     fullName: 'Garry Kasparov',
     blurb: 'Dynamic, aggressive, deeply prepared. Plays for the initiative from the first move.',
     style: 'Attack and preparation',
-    think: [1800, 4200],
+    think: [900, 2200],
     book: {
       w: [
         'e4 c5 Nf3 d6 d4 cxd4 Nxd4 Nf6 Nc3 a6 Be3 e5 Nb3 Be6 f3',

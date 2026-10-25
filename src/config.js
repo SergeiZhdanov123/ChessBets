@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import os from 'node:os';
 
 const env = process.env;
@@ -13,7 +14,7 @@ export const config = {
   prod: env.NODE_ENV === 'production',
 
   // Money. Everything is integer cents.
-  rakeBps: 400,           // 4% of the pot on every completed human game
+  rakeBps: 300,           // 3% of the pot on every completed human game
   withdrawFeeBps: 500,    // 5% of every withdrawal
   minWithdraw: 500,
   maxTestDeposit: 100_000,
@@ -33,6 +34,7 @@ export const config = {
   botStakeMin: 100,
   botStakeMax: 10_000,
   botMoveScale: num(env.BOT_MOVE_SCALE, 1),     // tests shrink think time
+  botStopDepth: num(env.BOT_STOP_DEPTH, 22),    // a bot search ends early at this depth
   botWinSuspendMinMs: num(env.BOT_WIN_SUSPEND_MIN_MS, 2 * HOUR),
   botWinSuspendMaxMs: num(env.BOT_WIN_SUSPEND_MAX_MS, 5 * HOUR),
 
@@ -42,7 +44,8 @@ export const config = {
   abandonMs: { 3: num(env.ABANDON_MS_3, 30_000), 10: num(env.ABANDON_MS_10, 60_000), 30: num(env.ABANDON_MS_30, 90_000) },
 
   // Stockfish.
-  stockfishPath: env.STOCKFISH_PATH || 'stockfish',
+  // bin/stockfish is what `npm install` downloads where none is installed.
+  stockfishPath: env.STOCKFISH_PATH || (fs.existsSync(new URL('../bin/stockfish', import.meta.url)) ? new URL('../bin/stockfish', import.meta.url).pathname : 'stockfish'),
   botEngines: num(env.BOT_ENGINES, 2),
   botThreads: num(env.BOT_THREADS, Math.max(1, Math.min(4, Math.floor((os.cpus().length - 2) / 2)))),
   botHashMb: num(env.BOT_HASH_MB, 256),

@@ -102,7 +102,7 @@ test('queue: insufficient funds rejected, leaving returns the stake', async () =
   await checkBooks(db());
 });
 
-test('human game: checkmate pays the pot minus 4% rake', async () => {
+test('human game: checkmate pays the pot minus 3% rake', async () => {
   const a = await player(), b = await player();
   const g = await match(a, b, 3, 500);
   await play(g, ['e4', 'e5', 'Qh5', 'Nc6', 'Bc4', 'Nf6', 'Qxf7#']);
@@ -110,9 +110,9 @@ test('human game: checkmate pays the pot minus 4% rake', async () => {
   assert.equal(end.game.result, '1-0');
   assert.equal(end.game.reason, 'checkmate');
   assert.equal(end.game.you, 'w');
-  assert.equal(await g.white.balance(), 10_000 - 500 + 960);
+  assert.equal(await g.white.balance(), 10_000 - 500 + 970);
   assert.equal(await g.black.balance(), 10_000 - 500);
-  assert.equal((await db().games.findOne({ _id: g.id })).rake, 40);
+  assert.equal((await db().games.findOne({ _id: g.id })).rake, 30);
   await checkBooks(db());
   a.close(); b.close();
 });
@@ -126,8 +126,8 @@ test('human game: draw by agreement still takes the rake from each side', async 
   g.black.send({ t: 'draw-accept', id: g.id });
   const end = await g.black.wait((m) => m.t === 'end');
   assert.equal(end.game.reason, 'agreement');
-  assert.equal(await a.balance(), 10_000 - 40);
-  assert.equal(await b.balance(), 10_000 - 40);
+  assert.equal(await a.balance(), 10_000 - 30);
+  assert.equal(await b.balance(), 10_000 - 30);
   await checkBooks(db());
   a.close(); b.close();
 });
@@ -407,6 +407,31 @@ test('bot stake limits', async () => {
   a.close();
 });
 
+test('bot engine down: no new bot games, and a game in progress is called off with the wager returned', async () => {
+  const a = await player();
+  const real = app.ctx.botPool;
+  try {
+    app.ctx.botPool = { healthy: false, search: async () => { throw new Error('stockfish exited'); } };
+    const r0 = await a.req('/api/bots/play', { bot: 'hikaru', stake: 300, color: 'w' });
+    assert.equal(r0.status, 503);
+    assert.equal(await a.balance(), 10_000);
+
+    // Engine up when the game starts, then it dies.
+    app.ctx.botPool = { healthy: true, search: async () => { throw new Error('stockfish exited'); } };
+    const r = await a.req('/api/bots/play', { bot: 'hikaru', stake: 300, color: 'w' });
+    assert.equal(r.status, 200);
+    a.send({ t: 'sub', id: r.data.id });
+    await a.wait((m) => m.t === 'game');
+    a.send({ t: 'move', id: r.data.id, u: 'a2a3', ply: 0 }); // out of book
+    const end = await a.wait((m) => m.t === 'end', 15_000);
+    assert.equal(end.game.status, 'aborted');
+    assert.equal(end.game.reason, 'bot-unavailable');
+    assert.equal(await a.balance(), 10_000);
+  } finally { app.ctx.botPool = real; }
+  await checkBooks(db());
+  a.close();
+});
+
 test('beating a bot: paid 2x, withdrawals held, suspended hours later, balance forfeited', async () => {
   const a = await player(5000);
   const r = await a.req('/api/bots/play', { bot: 'kasparov', stake: 1000, color: 'w' });
@@ -444,7 +469,7 @@ test('beating a bot: paid 2x, withdrawals held, suspended hours later, balance f
   a.close();
 });
 
-test('fair-play stop mid-game: honest player gets the whole pot, earlier victims refunded', async () => {
+test('fair-play stop mid-game: honest player gets the whole pot, earlier victims refunded only once staff approve', async () => {
   const cheat = await player(), victim = await player(), honest = await player();
   // Cheater beats the victim first.
   const g1 = await match(cheat, victim, 3, 500);
@@ -461,10 +486,25 @@ test('fair-play stop mid-game: honest player gets the whole pot, earlier victims
   const end = await honest.wait((m) => m.t === 'end');
   assert.equal(end.game.reason, 'fair-play');
   assert.equal(await honest.balance(), 10_000 + 1000); // full pot, no rake
-  assert.equal(await victim.balance(), 10_000);        // refunded
+  assert.equal(await victim.balance(), 9500);          // nothing paid yet
   const c = await db().users.findOne({ _id: cheat.user.id });
   assert.equal(c.status, 'suspended');
   assert.equal(c.balance, 0);
+  await checkBooks(db());
+
+  // The refund waits in the admin page until staff decide.
+  const claim = await db().refunds.findOne({ user_id: victim.user.id, status: 'pending' });
+  assert.equal(claim.amount, 500);
+  assert.equal(claim.cheater_id, cheat.user.id);
+  assert.equal((await victim.req(`/api/admin/refunds/${claim.id}/approve`, {})).status, 404, 'players cannot approve');
+  await db().users.update({ _id: honest.user.id }, { $set: { is_admin: 1 } });
+  const o = await honest.req('/api/admin/overview');
+  assert.ok(o.data.refunds.some((r) => r.id === claim.id && r.username === victim.user.username));
+  assert.equal((await honest.req(`/api/admin/refunds/${claim.id}/approve`, {})).status, 200);
+  assert.equal((await honest.req(`/api/admin/refunds/${claim.id}/approve`, {})).status, 409, 'paid once');
+  assert.equal((await honest.req(`/api/admin/refunds/${claim.id}/decline`, {})).status, 409);
+  assert.equal(await victim.balance(), 10_000);
+  await db().users.update({ _id: honest.user.id }, { $set: { is_admin: 0 } });
   await checkBooks(db());
   cheat.close(); victim.close(); honest.close();
 });

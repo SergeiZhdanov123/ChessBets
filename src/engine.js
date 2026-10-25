@@ -9,10 +9,14 @@ export class Engine {
     this.queue = Promise.resolve();
     this.multipv = 1;
     this.dead = false;
+    this.ok = false;        // answered readyok and hasn't died since
+    this.restarts = 0;
     this.start();
   }
 
   start() {
+    this.ok = false;
+    this.startError = null;
     this.proc = spawn(this.path, [], { stdio: ['pipe', 'pipe', 'ignore'] });
     this.buf = '';
     this.listeners = new Set();
@@ -26,15 +30,27 @@ export class Engine {
         for (const fn of this.listeners) fn(line);
       }
     });
-    this.proc.on('exit', () => {
-      for (const fn of this.listeners) fn('__exit__');
-      if (!this.dead) setTimeout(() => this.start(), 250);
-    });
-    this.proc.on('error', (err) => { this.startError = err; });
+    // A missing binary only raises 'error'; a crash only raises 'exit'.
+    // Either way pending work fails at once and a fresh process comes up,
+    // backing off when it keeps failing.
+    let down = false;
+    const died = () => {
+      if (down) return;
+      down = true;
+      this.ok = false;
+      for (const fn of [...this.listeners]) fn('__exit__');
+      if (this.dead) return;
+      const wait = Math.min(30_000, 250 * 2 ** Math.min(this.restarts++, 7));
+      setTimeout(() => !this.dead && this.start(), wait).unref?.();
+    };
+    this.proc.on('exit', died);
+    this.proc.on('error', (err) => { this.startError = err; died(); });
+    this.proc.stdin.on('error', () => {});
     this.send('uci');
     for (const [k, v] of Object.entries(this.options)) this.send(`setoption name ${k} value ${v}`);
     this.multipv = 1;
-    this.ready = this.waitFor((l) => l === 'readyok', 'isready');
+    this.ready = this.waitFor((l) => l === 'readyok', 'isready').then(() => { this.ok = true; this.restarts = 0; });
+    this.ready.catch(() => {});
   }
 
   send(cmd) {
@@ -44,7 +60,7 @@ export class Engine {
   waitFor(pred, cmd, onLine) {
     return new Promise((resolve, reject) => {
       const fn = (line) => {
-        if (line === '__exit__') { this.listeners.delete(fn); reject(new Error('stockfish exited')); return; }
+        if (line === '__exit__') { this.listeners.delete(fn); reject(new Error(this.startError ? `stockfish: ${this.startError.message}` : 'stockfish exited')); return; }
         onLine?.(line);
         if (pred(line)) { this.listeners.delete(fn); resolve(line); }
       };
@@ -53,10 +69,15 @@ export class Engine {
     });
   }
 
-  // search({ fen | moves, movetime | nodes | depth, multipv, searchmoves }) -> { best, lines: [{ move, cp, mate, pv, depth }] }
+  // search({ fen | moves, movetime | nodes | depth, multipv, searchmoves, stopDepth }) -> { best, lines: [{ move, cp, mate, pv, depth }] }
   // Passing the game's moves (from the start position) instead of a FEN lets
-  // the engine see repetitions.
-  search({ fen, moves, movetime, nodes, depth, multipv = 1, searchmoves }) {
+  // the engine see repetitions. stopDepth ends a timed search early once it
+  // has looked that deep.
+  //
+  // A search that runs well past its budget is stopped, and if the engine
+  // still doesn't answer, the process is killed and the search fails, so a
+  // stuck engine can never hold a game hostage.
+  search({ fen, moves, movetime, nodes, depth, multipv = 1, searchmoves, stopDepth }) {
     const job = async () => {
       await this.ready;
       if (multipv !== this.multipv) {
@@ -67,13 +88,25 @@ export class Engine {
       const lines = [];
       let go = movetime ? `go movetime ${Math.max(10, Math.round(movetime))}` : nodes ? `go nodes ${nodes}` : `go depth ${depth || 12}`;
       if (searchmoves?.length) go += ` searchmoves ${searchmoves.join(' ')}`;
-      const bestLine = await this.waitFor((l) => l.startsWith('bestmove'), go, (line) => {
-        if (!line.startsWith('info') || !line.includes(' pv ')) return;
-        const info = parseInfo(line);
-        if (info) lines[info.multipv - 1] = info;
-      });
-      const best = bestLine.split(/\s+/)[1];
-      return { best: best === '(none)' ? null : best, lines: lines.filter(Boolean) };
+      let stopped = false;
+      const proc = this.proc;
+      const budget = movetime ? movetime + 3000 : 120_000;
+      const soft = setTimeout(() => { stopped = true; this.send('stop'); }, budget);
+      const hard = setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, budget + 3000);
+      try {
+        const bestLine = await this.waitFor((l) => l.startsWith('bestmove'), go, (line) => {
+          if (!line.startsWith('info') || !line.includes(' pv ')) return;
+          const info = parseInfo(line);
+          if (!info) return;
+          lines[info.multipv - 1] = info;
+          if (stopDepth && !stopped && info.multipv === 1 && info.depth >= stopDepth) { stopped = true; this.send('stop'); }
+        });
+        const best = bestLine.split(/\s+/)[1];
+        return { best: best === '(none)' ? null : best, lines: lines.filter(Boolean) };
+      } finally {
+        clearTimeout(soft);
+        clearTimeout(hard);
+      }
     };
     const p = this.queue.then(job, job);
     this.queue = p.catch(() => {});
@@ -131,5 +164,13 @@ export class EnginePool {
   }
   search(opts) { return this.run((e) => e.search(opts)); }
   get busy() { return this.engines.length - this.free.length + this.waiting.length; }
+  // True once at least one engine process is up and answering.
+  get healthy() { return this.engines.some((e) => e.ok); }
+  // Waits up to `ms` for an engine to come up.
+  async whenReady(ms = 15_000) {
+    const end = Date.now() + ms;
+    while (!this.healthy && Date.now() < end) await new Promise((r) => setTimeout(r, 100));
+    return this.healthy;
+  }
   quit() { this.engines.forEach((e) => e.quit()); }
 }

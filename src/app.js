@@ -325,6 +325,7 @@ export async function createApp(opts = {}) {
       withdrawFeeBps: config.withdrawFeeBps,
       minWithdraw: config.minWithdraw,
       bots: botList(),
+      botsOnline: ctx.botPool.healthy,
       bot: { minutes: config.botMinutes, min: config.botStakeMin, max: config.botStakeMax },
       coins: ctx.wallet.coins(),
       payments: config.payments,
@@ -346,6 +347,7 @@ export async function createApp(opts = {}) {
       return ctx.games.createBot(req.user, bot, cents, color, { ip: req.ip2, device: req.device });
     }).catch((e) => {
       if (e.status === 409) { res.status(409).json({ error: e.message, game: e.game }); return null; }
+      if (e.status === 503) { res.status(503).json({ error: e.message }); return null; }
       throw e;
     });
     if (!g) return;
@@ -491,7 +493,10 @@ export async function createApp(opts = {}) {
       db.games.count({ status: 'finished' }),
       db.tickets.count({ status: 'open' }),
     ]);
-    res.json({ house, flagged, pending, totals: { users, balances, held, games, openTickets }, model: MODEL });
+    const refunds = await db.refunds.find({ status: 'pending' }, { sort: { created_at: 1 }, limit: 200 });
+    const who = new Map((await db.users.find({ _id: { $in: [...new Set(refunds.flatMap((r) => [r.user_id, r.cheater_id]))] } }, { projection: { username: 1 } })).map((u) => [u.id, u.username]));
+    for (const r of refunds) { r.username = who.get(r.user_id) || null; r.cheater = who.get(r.cheater_id) || null; }
+    res.json({ house, flagged, pending, refunds, totals: { users, balances, held, games, openTickets }, model: MODEL });
   }));
   app.get('/api/admin/users', needUser, needAdmin, wrap(async (req, res) => {
     const q = String(req.query.q || '').toLowerCase().slice(0, 32);
@@ -541,6 +546,14 @@ export async function createApp(opts = {}) {
     const id = Number(req.params.id);
     await db.scheduled_actions.updateMany({ user_id: id, status: 'pending' }, { $set: { status: 'cancelled', done_at: Date.now() } });
     await ctx.enforcement.clearReview(id);
+    res.json({ ok: true });
+  }));
+  app.post('/api/admin/refunds/:id/:decision', needUser, needAdmin, wrap(async (req, res) => {
+    const { decision } = req.params;
+    if (decision !== 'approve' && decision !== 'decline') return res.status(404).json({ error: 'Not found' });
+    const note = String(req.body?.note || '').trim().slice(0, 200) || null;
+    const r = await ctx.enforcement.decideRefund(Number(req.params.id), decision === 'approve', req.user.id, note);
+    if (!r) return res.status(409).json({ error: 'This refund was already decided' });
     res.json({ ok: true });
   }));
   app.get('/api/admin/payments', needUser, needAdmin, wrap(async (req, res) => {

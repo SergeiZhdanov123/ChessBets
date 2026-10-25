@@ -18,7 +18,7 @@ const mongoUri = await testMongo();
 const server = spawn(process.execPath, ['server.js'], {
   cwd: root,
   env: {
-    ...process.env, PORT: String(port), HOST: '127.0.0.1', MONGODB_URI: mongoUri, MONGODB_DB: testDbName('e2e'), ADMIN_USERS: 'e2eadmin',
+    ...process.env, PORT: String(port), HOST: '127.0.0.1', MONGODB_URI: mongoUri, MONGODB_DB: testDbName('e2e'), ADMIN_USERS: 'e2eadmin', PAYMENTS: 'paper',
     DEPOSIT_CONFIRM_MS: '150', WITHDRAW_PROCESS_MS: '200', BOT_MOVE_SCALE: '0.2', REGISTER_PER_HOUR: '1000', ANALYSIS_NODES: '50000',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -160,9 +160,9 @@ await check('human game: queue, match, moves, chat, draw offer, rake on the draw
   await B.click('[data-a=accept]');
   await W.waitForSelector('.result');
   assert.match(await W.locator('.result h3').textContent(), /Draw/);
-  assert.match(await W.locator('.result .amount').textContent(), /\$4\.80/);
-  await alice.waitForFunction(() => document.querySelector('#balAmt').textContent === '$192.80');
-  await bob.waitForFunction(() => document.querySelector('#balAmt').textContent === '$49.80');
+  assert.match(await W.locator('.result .amount').textContent(), /\$4\.85/);
+  await alice.waitForFunction(() => document.querySelector('#balAmt').textContent === '$192.85');
+  await bob.waitForFunction(() => document.querySelector('#balAmt').textContent === '$49.85');
 });
 
 await check('withdrawal shows the 5% fee and completes', async () => {
@@ -174,7 +174,7 @@ await check('withdrawal shows the 5% fee and completes', async () => {
   await bob.fill('#wd-amt', '20');
   assert.match(await bob.locator('#wd-sum').textContent(), /-\$1\.00.*\$19\.00/s);
   await bob.click('#wd-go');
-  await bob.waitForFunction(() => document.querySelector('#balAmt').textContent === '$29.80');
+  await bob.waitForFunction(() => document.querySelector('#balAmt').textContent === '$29.85');
   await bob.waitForSelector('#wl-wds .status.ok', { timeout: 5000 });
   await bob.keyboard.press('Escape');
 });

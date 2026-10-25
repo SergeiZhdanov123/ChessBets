@@ -13,7 +13,7 @@ export const fmt = (cents) => {
 export const rakeOf = (cents) => Math.round((cents * config.rakeBps) / 10_000);
 export const withdrawFeeOf = (cents) => Math.round((cents * config.withdrawFeeBps) / 10_000);
 
-// What a human-game wager returns, per seat. The pot is both stakes; 4% of
+// What a human-game wager returns, per seat. The pot is both stakes; 3% of
 // it goes to the house on any game that was actually played.
 export function humanPayouts(stake) {
   const pot = stake * 2;

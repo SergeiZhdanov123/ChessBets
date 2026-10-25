@@ -136,6 +136,8 @@ const P = {
   user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c.8-4 4-6.5 8-6.5s7.2 2.5 8 6.5"/>',
   admin: '<path d="M12 3 4.5 6v5.5c0 4.6 3.2 8.3 7.5 9.5 4.3-1.2 7.5-4.9 7.5-9.5V6Z"/><circle cx="12" cy="10.5" r="2.5"/><path d="M8 16.5c.8-1.6 2.2-2.5 4-2.5s3.2.9 4 2.5"/>',
   alert: '<path d="M12 3 2 20h20Z"/><path d="M12 10v4.5"/><circle cx="12" cy="17.3" r=".6" fill="currentColor"/>',
+  eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="3"/>',
+  'eye-off': '<path d="M10.6 5.6A9.7 9.7 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a17 17 0 0 1-2.6 3.4M6.2 7.2A16.6 16.6 0 0 0 2.5 12S6 18.5 12 18.5a9 9 0 0 0 4.4-1.1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/><path d="m3 3 18 18"/>',
   lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
   arrowDown: '<path d="M12 4v15M6 13l6 6 6-6"/>',
   arrowUp: '<path d="M12 20V5M6 11l6-6 6 6"/>',
@@ -160,5 +162,5 @@ export const reasonText = (r, result, you) => ({
   checkmate: 'by checkmate', resign: 'by resignation', timeout: 'on time', 'timeout-draw': 'timeout vs insufficient material',
   stalemate: 'by stalemate', repetition: 'by threefold repetition', insufficient: 'by insufficient material', 'fifty-moves': 'by the 50-move rule',
   agreement: 'by agreement', abandoned: 'by abandonment', 'fair-play': 'by fair-play decision', aborted: 'Game aborted',
-  'no-first-move': 'No first move in time', 'abandoned-early': 'Player left before the game started', 'server-restart': 'Server restarted',
+  'no-first-move': 'No first move in time', 'abandoned-early': 'Player left before the game started', 'server-restart': 'Server restarted', 'bot-unavailable': 'Bot unavailable, wager returned',
 })[r] || r || '';

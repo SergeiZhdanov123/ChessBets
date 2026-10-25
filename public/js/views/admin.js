@@ -42,6 +42,17 @@ export default function admin(el, [userId]) {
           <td class="num">${u.maxEvidence ?? '-'}</td><td class="r num">${u.events}</td><td class="r num">${money(u.balance)}</td></tr>`).join('')}
       </tbody></table></div>` : '<div class="empty card">Nobody is flagged.</div>'}
 
+      <div class="section-head" style="margin-top:24px"><h2>${icon('wallet')}Fair-play refunds to approve <span class="dim">${o.refunds.length}</span></h2></div>
+      ${o.refunds.length ? `<div class="table-wrap"><table class="table"><thead><tr><th>Player</th><th>Lost to</th><th>Game</th><th class="r">Refund</th><th>Requested</th><th></th></tr></thead><tbody>
+        ${o.refunds.map((r) => `<tr>
+          <td><a class="rowlink strong" href="/admin/${r.user_id}">${esc(r.username || '?')}</a></td>
+          <td><a class="rowlink" href="/admin/${r.cheater_id}">${esc(r.cheater || '?')}</a></td>
+          <td><a class="rowlink num" href="/game/${esc(r.game_id)}">${esc(String(r.game_id).slice(0, 8))}</a></td>
+          <td class="r num strong">${money(r.amount)}</td><td>${dateTime(r.created_at)}</td>
+          <td><div style="display:flex;gap:6px;justify-content:flex-end"><button class="btn btn-green btn-sm" data-refund="${r.id}" data-d="approve">Approve</button><button class="btn btn-ghost btn-sm" data-refund="${r.id}" data-d="decline">Decline</button></div></td>
+        </tr>`).join('')}
+      </tbody></table></div>` : '<div class="empty card">No refunds waiting.</div>'}
+
       <div class="section-head" style="margin-top:24px"><h2>${icon('clock')}Scheduled actions</h2></div>
       ${o.pending.length ? `<table class="table"><tbody>${o.pending.map((a) => `<tr><td><a class="rowlink strong" href="/admin/${a.user_id}">${esc(a.username)}</a></td><td>${esc(a.kind)}</td><td>${esc((typeof a.payload === 'string' ? JSON.parse(a.payload || '{}') : a.payload)?.reason || '')}</td><td class="r">${dateTime(a.run_at)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty card">Nothing scheduled.</div>'}
 
@@ -49,6 +60,15 @@ export default function admin(el, [userId]) {
       <div id="tk">${t.tickets.length ? '' : '<div class="empty card">No tickets.</div>'}</div>`;
 
     if (pay.mode === 'crypto') wirePayments(box, load);
+    box.querySelectorAll('[data-refund]').forEach((b) => (b.onclick = async () => {
+      const approve = b.dataset.d === 'approve';
+      const row = o.refunds.find((r) => String(r.id) === b.dataset.refund);
+      if (!(await confirmBox(approve ? `Refund ${money(row.amount)} to ${row.username}?` : 'Decline this refund?',
+        approve ? 'Their stake from this game goes back to their balance.' : 'Nothing is paid. You can still credit them by hand later.',
+        { ok: approve ? 'Approve' : 'Decline', danger: !approve }))) return;
+      try { await api(`/api/admin/refunds/${b.dataset.refund}/${b.dataset.d}`, {}); toast(approve ? 'Refund paid' : 'Refund declined', { kind: 'ok', ms: 2000 }); load(); }
+      catch (e) { toast(e.message, { kind: 'bad' }); }
+    }));
     const tk = box.querySelector('#tk');
     tk.innerHTML += t.tickets.map((x) => `
       <div class="ticket">
@@ -210,7 +230,7 @@ async function userPage(el, id) {
     const a = b.dataset.act;
     try {
       if (a === 'suspend') {
-        if (!(await confirmBox(`Suspend ${u.username}?`, `Their ${money(u.balance)} balance is forfeited and opponents they beat this week are refunded.`, { ok: 'Suspend', danger: true }))) return;
+        if (!(await confirmBox(`Suspend ${u.username}?`, `Their ${money(u.balance)} balance is forfeited. Opponents they beat this week are queued for a refund you approve.`, { ok: 'Suspend', danger: true }))) return;
         await api(`/api/admin/users/${id}/suspend`, { reason: 'Suspended by staff after review' });
       }
       if (a === 'clear') await api(`/api/admin/users/${id}/clear-review`, {});

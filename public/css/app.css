@@ -207,6 +207,8 @@ svg { flex-shrink: 0; }
 
 /* ---------- forms ---------- */
 .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+/* .input grows along a row; in a column it would collapse to nothing. */
+.field > .input, .field > textarea.input { flex: none; }
 .field-label { display: flex; justify-content: space-between; align-items: baseline; color: var(--text-2); font-weight: 600; font-size: 14px; }
 .field-label .aside { font-size: 13px; color: var(--text-3); font-weight: 600; }
 .input-wrap {
@@ -245,6 +247,31 @@ select.input { appearance: none; padding-right: 30px; background-image: url("dat
 .check input:checked::after { content: ''; width: 9px; height: 5px; border: solid var(--green-ink); border-width: 0 0 2px 2px; transform: rotate(-45deg) translate(1px, -1px); }
 .check a { color: var(--text); text-decoration: underline; text-underline-offset: 2px; }
 .form-error { color: var(--red); font-weight: 600; font-size: 13px; min-height: 18px; margin: -4px 0 10px; }
+
+/* Sign in / register */
+.auth-modal .modal-head { padding: 20px 18px 6px 28px; }
+.auth-modal .modal-head h3 { font-size: 18px; }
+.auth-modal .modal-body { padding: 14px 28px 28px; }
+.auth-modal .modal-foot { padding: 16px 28px; font-size: 13.5px; }
+.auth-form .field { gap: 8px; margin-bottom: 18px; }
+.auth-form .input { height: 46px; padding: 0 14px; font-size: 15px; }
+.auth-form .pw-wrap .input { height: 44px; }
+.pw-wrap { padding-right: 4px; }
+.pw-toggle { width: 40px; height: 40px; flex-shrink: 0; display: grid; place-items: center; color: var(--text-2); border-radius: 3px; transition: color 0.15s, background 0.15s; }
+.pw-toggle:hover { color: var(--text); background: var(--bg-5); }
+.pw-toggle:focus-visible { outline: 2px solid var(--text-3); outline-offset: -2px; }
+.pw-toggle svg { width: 19px; height: 19px; }
+.auth-checks { display: flex; flex-direction: column; gap: 14px; margin: 24px 0 6px; padding-top: 20px; border-top: 1px solid var(--bg-4); }
+.auth-checks .check { margin: 0; font-size: 13.5px; line-height: 1.5; }
+.auth-form .form-error { min-height: 0; margin: 0 0 14px; }
+.auth-form .form-error:empty { display: none; }
+.auth-form .btn-lg { margin-top: 4px; }
+.auth-form .btn-lg { height: 50px; }
+@media (max-width: 520px) {
+  .auth-modal .modal-head { padding-left: 20px; }
+  .auth-modal .modal-body { padding: 12px 20px 22px; }
+  .auth-modal .modal-foot { padding: 14px 20px; }
+}
 
 /* segmented control (Manual / Auto style) */
 .seg { display: flex; background: var(--bg-1); border-radius: 999px; padding: 5px; gap: 4px; margin-bottom: 14px; }
@@ -687,6 +714,8 @@ select.input { appearance: none; padding-right: 30px; background-image: url("dat
 .prose li { margin: 4px 0; }
 .prose b { color: var(--text); font-weight: 700; }
 .prose a { color: var(--text); text-decoration: underline; text-underline-offset: 2px; }
+.prose.legal h2 { font-size: 16px; margin-top: 28px; }
+.prose.legal .caps { color: var(--text); font-weight: 600; }
 .fp-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 14px 0; }
 .fp-grid .card { padding: 16px; }
 .fp-grid h3 { font-size: 15px; margin-bottom: 6px; }

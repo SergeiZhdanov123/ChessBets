@@ -13,9 +13,7 @@ export function openWallet(tab) {
   const live = store.config?.payments === 'crypto';
   const m = openModal({
     title: 'Wallet', iconName: 'wallet', width: 520, body: '<div class="skel" style="height:260px"></div>',
-    foot: live
-      ? 'Deposits go straight to our own wallets and are credited once the network confirms them. Withdrawals are checked and sent by staff.'
-      : 'Paper money. Deposits and withdrawals are simulated and nothing leaves this site.',
+    foot: live ? '' : 'Paper money. Deposits and withdrawals are simulated and nothing leaves this site.',
     onClose: () => { offs.forEach((f) => f()); clearInterval(tick); clearInterval(look); state.invoice = null; },
   });
   const offs = [
