@@ -162,7 +162,8 @@ export function createHub(ctx) {
       // session lookup finishes wait for it, still in order.
       conn.ready = (async () => {
         const auth = await ctx.api.authFromRequest(req);
-        Object.assign(conn, { userId: auth.user?.id || null, device: auth.device, ip: auth.ip });
+        Object.assign(conn, { userId: auth.user?.id || null, admin: !!auth.user?.is_admin, device: auth.device, ip: auth.ip });
+        if (ctx.site.maintenance && !conn.admin) return sendAway(conn);
         if (conn.userId) {
           if (!byUser.has(conn.userId)) byUser.set(conn.userId, new Set());
           byUser.get(conn.userId).add(conn);
@@ -194,6 +195,15 @@ export function createHub(ctx) {
         conn.ready.then(() => disconnected(conn));
       });
     });
+
+    // Site made unavailable: the page reloads into the notice.
+    function sendAway(conn) {
+      send(conn, { t: 'site-offline' });
+      conn.ws.close(4503);
+    }
+    hub.sendPlayersAway = () => {
+      for (const c of conns) c.ready.then(() => { if (!c.admin && c.ws.readyState === 1) sendAway(c); });
+    };
 
     function disconnected(conn) {
       if (ctx.closed) return; // shutting down: no presence or queue timers

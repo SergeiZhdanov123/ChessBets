@@ -59,6 +59,8 @@ export function connect() {
     let msg;
     try { msg = JSON.parse(ev.data); } catch { return; }
     if (msg.t === 'ping') { ws.send({ t: 'pong', ts: msg.ts }); return; }
+    // An admin made the site unavailable: reloading shows the notice.
+    if (msg.t === 'site-offline') { sock.onclose = null; location.reload(); return; }
     if (msg.t === 'hello') {
       store.set({ counts: msg.queues, online: msg.online, ...(msg.user !== undefined ? { user: msg.user, activeGame: msg.activeGame ?? null, queue: msg.queue ?? null } : {}) });
     }

@@ -11,7 +11,7 @@ const port = await new Promise((r) => { const s = net.createServer().listen(0, (
 const base = `http://127.0.0.1:${port}`;
 const server = spawn(process.execPath, ['server.js'], {
   cwd: root,
-  env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', MONGODB_URI: await testMongo(), MONGODB_DB: testDbName('shots'), PAYMENTS: 'paper', MAINTENANCE: '0' },
+  env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', MONGODB_URI: await testMongo(), MONGODB_DB: testDbName('shots'), PAYMENTS: 'paper' },
   stdio: ['ignore', 'pipe', 'inherit'],
 });
 await new Promise((r) => server.stdout.on('data', (d) => String(d).includes('running at') && r()));

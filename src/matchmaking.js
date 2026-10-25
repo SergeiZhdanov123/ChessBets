@@ -78,6 +78,13 @@ export function createMatchmaker(ctx) {
     return true;
   }
 
+  // Everyone out, stakes returned. Returns how many were waiting.
+  async function leaveAll(why) {
+    const ids = [...new Set([...where.keys(), ...joining.keys()])];
+    for (const id of ids) await leave(id, why);
+    return ids.length;
+  }
+
   // The only hard rule: one browser can't play itself. Shared IPs are normal
   // (homes, campuses, phone carriers), and a laptop a friend once signed in
   // on is not proof of anything, so those pairings are allowed and recorded
@@ -176,7 +183,7 @@ export function createMatchmaker(ctx) {
   start();
 
   return {
-    join, leave, tick, counts,
+    join, leave, leaveAll, tick, counts,
     status: (userId) => {
       const key = where.get(userId);
       if (!key) return null;

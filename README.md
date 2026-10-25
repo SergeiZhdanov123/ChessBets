@@ -77,6 +77,8 @@ Deposit addresses look like `demo-btc-...` on purpose, so nobody can send real c
 
 **Visitors.** Admin shows unique visitors today, yesterday and over 7 days: one per browser (device cookie) per UTC day, counted when the page loads its config, so crawlers that don't run scripts and admins are left out. Records (`visits` collection) expire after 90 days.
 
+**Making the site unavailable.** Admin has a "Make unavailable" button at the top. While it's on, players get a single "ChessBets is unavailable" box with nothing to click, every API call is refused, and open tabs reload into the notice. Games in progress are voided with both stakes returned and the queues are emptied. Deposits keep being credited. Admins can still sign in at `/login` and use the whole site, and "Reopen the site" turns it back off. The setting is stored in the database (`settings` collection), so a restart or redeploy keeps it.
+
 **Suspension.** A suspended account loses its entire balance, including money in play and pending withdrawals. Nothing is refunded. The suspended user can still sign in, sees a banner telling them to contact support, and can open tickets. Admins can reinstate an account with or without the forfeited balance.
 
 ## Fair play (human games)
@@ -150,7 +152,6 @@ The server tests check after every scenario that each user's ledger sums to thei
 | Variable | Default | |
 |---|---|---|
 | `PORT` / `HOST` | 3000 / 0.0.0.0 | |
-| `MAINTENANCE` | on | Every page shows "ChessBets is unavailable" and the API and live connections are refused (payment watching keeps running). Set `0` to open the site. |
 | `MONGODB_URI` | | required |
 | `MONGODB_DB` | chessbets | database name |
 | `ADMIN_USERS` | | comma-separated usernames |

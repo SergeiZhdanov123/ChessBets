@@ -18,7 +18,7 @@ const mongoUri = await testMongo();
 const server = spawn(process.execPath, ['server.js'], {
   cwd: root,
   env: {
-    ...process.env, MAINTENANCE: '0', PORT: String(port), HOST: '127.0.0.1', MONGODB_URI: mongoUri, MONGODB_DB: testDbName('e2e'), ADMIN_USERS: 'e2eadmin', PAYMENTS: 'paper',
+    ...process.env, PORT: String(port), HOST: '127.0.0.1', MONGODB_URI: mongoUri, MONGODB_DB: testDbName('e2e'), ADMIN_USERS: 'e2eadmin', PAYMENTS: 'paper',
     DEPOSIT_CONFIRM_MS: '150', WITHDRAW_PROCESS_MS: '200', REGISTER_PER_HOUR: '1000', ANALYSIS_NODES: '50000',
   },
   stdio: ['ignore', 'pipe', 'pipe'],

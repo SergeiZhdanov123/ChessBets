@@ -10,10 +10,6 @@ export const config = {
   mongoUri: env.MONGODB_URI || '',
   mongoDb: env.MONGODB_DB || 'chessbets',
   prod: env.NODE_ENV === 'production',
-  // While on, every page shows "unavailable" and the API and live
-  // connections are refused. Payment watching keeps running. On unless
-  // MAINTENANCE=0.
-  maintenance: env.MAINTENANCE !== '0',
 
   // Money. Everything is integer cents.
   rakeBps: 300,           // 3% of the pot on every completed human game

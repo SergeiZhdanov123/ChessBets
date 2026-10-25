@@ -20,6 +20,11 @@ export default function admin(el, [userId]) {
     // Ledger kinds with no label of their own (left over from removed features).
     const other = o.house.filter((h) => !HOUSE_LABEL[h.kind]).reduce((m, h) => ({ n: m.n + h.n, total: m.total + h.total }), { n: 0, total: 0 });
     box.innerHTML = `
+      <div class="card card-pad site-switch ${o.maintenance ? 'off' : ''}">
+        <div><b>${o.maintenance ? 'The site is unavailable' : 'The site is open'}</b>
+          <p class="muted">${o.maintenance ? 'Players see only the unavailable notice. Admins can still sign in at /login and use everything.' : 'Making it unavailable shows players a notice they can\'t click past.'}</p></div>
+        <button class="btn ${o.maintenance ? 'btn-green' : 'btn-red'}" id="siteSwitch">${o.maintenance ? 'Reopen the site' : 'Make unavailable'}</button>
+      </div>
       <div class="kpis">
         <div class="kpi"><span>House result</span><b class="${net >= 0 ? 'green' : 'red'}">${money(net, { sign: true })}</b></div>
         <div class="kpi"><span>Player balances</span><b>${money(o.totals.balances)}</b></div>
@@ -65,6 +70,17 @@ export default function admin(el, [userId]) {
       <div id="tk">${t.tickets.length ? '' : '<div class="empty card">No tickets.</div>'}</div>`;
 
     if (pay.mode === 'crypto') wirePayments(box, load);
+    box.querySelector('#siteSwitch').onclick = async () => {
+      const on = !o.maintenance;
+      if (on && !(await confirmBox('Make the site unavailable?',
+        'Players see only the unavailable notice until you reopen it. Games in progress are voided and both stakes returned, and anyone waiting in a queue gets their stake back. Deposits keep being credited.',
+        { ok: 'Make unavailable', danger: true }))) return;
+      try {
+        const r = await api('/api/admin/maintenance', { on });
+        toast(on ? 'The site is unavailable' : 'The site is open again', { kind: 'ok', body: on && (r.games || r.queued) ? `${r.games} game${r.games === 1 ? '' : 's'} voided, ${r.queued} left the queue.` : '' });
+        load();
+      } catch (e) { toast(e.message, { kind: 'bad' }); }
+    };
     box.querySelectorAll('[data-refund]').forEach((b) => (b.onclick = async () => {
       const approve = b.dataset.d === 'approve';
       const row = o.refunds.find((r) => String(r.id) === b.dataset.refund);

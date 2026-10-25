@@ -78,7 +78,8 @@ async function checkMode(db) {
   }
 }
 
-// The whole site while config.maintenance is on: one box, nothing to click.
+// What players see while an admin has the site switched off: one box,
+// nothing to click.
 const MAINTENANCE_PAGE = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ChessBets is unavailable</title><link rel="icon" href="/favicon.svg">
@@ -147,6 +148,24 @@ export async function createApp(opts = {}) {
   await ctx.enforcement.tick();
 
   if (config.adminUsers.length) await db.users.updateMany({ username_lc: { $in: config.adminUsers } }, { $set: { is_admin: 1 } });
+
+  // ---- site on/off ----
+  // Admins can make the site unavailable to players. The switch lives in
+  // the database so a restart or redeploy keeps it where it was.
+  const settings = db.raw.collection('settings');
+  ctx.site = { maintenance: !!(await settings.findOne({ _id: 'site' }))?.maintenance };
+  // Turning it on empties the queues and voids live games (both stakes go
+  // back), then sends every player's open tab to the notice.
+  ctx.setMaintenance = async (on) => {
+    await settings.updateOne({ _id: 'site' }, { $set: { maintenance: on, changed_at: Date.now() } }, { upsert: true });
+    ctx.site.maintenance = on;
+    if (!on) return { maintenance: false };
+    const queued = await ctx.matchmaker.leaveAll('site-offline');
+    const games = [...ctx.games.live.values()].filter((g) => g.status === 'active');
+    await Promise.all(games.map((g) => g.end({ status: 'aborted', reason: 'site-offline' })));
+    ctx.hub.sendPlayersAway();
+    return { maintenance: true, queued, games: games.length };
+  };
 
   // ---- auth helpers ----
   // Session tokens are looked up once a minute at most; the user record is
@@ -228,15 +247,6 @@ export async function createApp(opts = {}) {
     next();
   });
 
-  if (config.maintenance) {
-    app.use((req, res, next) => {
-      if (req.path === '/favicon.svg' || req.path.startsWith('/fonts/')) return next();
-      res.status(503).set('Retry-After', '3600');
-      if (req.path.startsWith('/api')) return res.json({ error: 'ChessBets is unavailable right now.' });
-      res.type('html').send(MAINTENANCE_PAGE);
-    });
-  }
-
   // Every browser gets a random device id. It is how two accounts on one
   // machine are kept apart in matchmaking.
   app.use((req, res, next) => {
@@ -249,6 +259,22 @@ export async function createApp(opts = {}) {
     req.device = c.cbd;
     req.ip2 = clientIp(req);
     next();
+  });
+
+  // Site switched off from Admin: players get the unavailable notice and
+  // every API call is refused. Admins pass, and /login stays open so they
+  // can sign in. Static files (anything with an extension) are served.
+  const OPEN_WHILE_OFF = new Set(['GET /api/config', 'GET /api/me', 'POST /api/login', 'POST /api/logout']);
+  app.use(async (req, res, next) => {
+    if (!ctx.site.maintenance) return next();
+    const isApi = req.path.startsWith('/api');
+    if (isApi ? OPEN_WHILE_OFF.has(`${req.method} ${req.path}`) : req.path === '/login' || /\.\w+$/.test(req.path)) return next();
+    let user = null;
+    try { user = await userFromToken(req.cookies.cbs); } catch {}
+    if (user?.is_admin) return next();
+    res.status(503).set('Retry-After', '600');
+    if (isApi) return res.json({ error: 'ChessBets is unavailable right now.', code: 'maintenance' });
+    res.type('html').send(MAINTENANCE_PAGE);
   });
 
   // Only API calls need the signed-in user; static files skip the lookup.
@@ -369,6 +395,7 @@ export async function createApp(opts = {}) {
       payments: config.payments,
       chat: CHAT_PRESETS,
       counts: ctx.matchmaker.counts(),
+      maintenance: ctx.site.maintenance,
     });
   });
 
@@ -522,7 +549,10 @@ export async function createApp(opts = {}) {
     const refunds = await db.refunds.find({ status: 'pending' }, { sort: { created_at: 1 }, limit: 200 });
     const who = new Map((await db.users.find({ _id: { $in: [...new Set(refunds.flatMap((r) => [r.user_id, r.cheater_id]))] } }, { projection: { username: 1 } })).map((u) => [u.id, u.username]));
     for (const r of refunds) { r.username = who.get(r.user_id) || null; r.cheater = who.get(r.cheater_id) || null; }
-    res.json({ house, flagged, pending, refunds, unsettled, totals: { users, balances, held, games, openTickets }, visitors: { today: visitorsToday, yesterday: visitorsYesterday, week: visitors7d }, model: MODEL });
+    res.json({ house, flagged, pending, refunds, unsettled, maintenance: ctx.site.maintenance, totals: { users, balances, held, games, openTickets }, visitors: { today: visitorsToday, yesterday: visitorsYesterday, week: visitors7d }, model: MODEL });
+  }));
+  app.post('/api/admin/maintenance', needUser, needAdmin, wrap(async (req, res) => {
+    res.json(await ctx.setMaintenance(req.body?.on === true));
   }));
   app.get('/api/admin/users', needUser, needAdmin, wrap(async (req, res) => {
     const q = String(req.query.q || '').toLowerCase().slice(0, 32);
@@ -638,7 +668,7 @@ export async function createApp(opts = {}) {
   app.get(/^\/(?!api|ws|vendor).*/, (req, res) => res.sendFile(path.join(ROOT, 'public/index.html')));
 
   const server = http.createServer(app);
-  if (!config.maintenance) ctx.hub.attach(server); // with no handler, live connections are dropped
+  ctx.hub.attach(server);
 
   // `crash: true` stops everything without waiting for in-flight work, the
   // way a killed process would (used by the restart test).

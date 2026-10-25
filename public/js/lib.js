@@ -169,5 +169,5 @@ export const reasonText = (r, result, you) => ({
   checkmate: 'by checkmate', resign: 'by resignation', timeout: 'on time', 'timeout-draw': 'timeout vs insufficient material',
   stalemate: 'by stalemate', repetition: 'by threefold repetition', insufficient: 'by insufficient material', 'fifty-moves': 'by the 50-move rule',
   agreement: 'by agreement', abandoned: 'by abandonment', 'fair-play': 'by fair-play decision', aborted: 'Game aborted',
-  'no-first-move': 'No first move in time', 'abandoned-early': 'Player left before the game started', 'server-restart': 'Server restarted',
+  'no-first-move': 'No first move in time', 'abandoned-early': 'Player left before the game started', 'server-restart': 'Server restarted', 'site-offline': 'Site taken offline, stakes returned',
 })[r] || r || '';

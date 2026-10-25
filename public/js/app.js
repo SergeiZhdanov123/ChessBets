@@ -268,6 +268,15 @@ export function onSignedIn() {
     setTimeout(() => location.reload(), 3000);
     return;
   }
+  // Site made unavailable by an admin. The server only serves this page at
+  // /login then, so staff can sign in; anyone else lands on the notice.
+  if (store.config.maintenance && !store.user?.isAdmin) {
+    if (store.user) return location.replace('/');
+    shell.hidden = true;
+    document.getElementById('mnav').hidden = true;
+    openAuth('login', { then: () => location.replace('/') });
+    return;
+  }
   renderHeader();
   renderSuspended();
   renderFooter();

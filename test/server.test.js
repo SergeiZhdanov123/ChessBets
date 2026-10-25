@@ -1,6 +1,7 @@
 import { boot, Client, sleep, checkBooks } from './helpers.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import WebSocket from 'ws';
 
 process.env.FIRST_MOVE_MS = '600';
 process.env.ABANDON_MS_3 = '500';
@@ -507,22 +508,73 @@ test('restart: a finished game that never settled pays the winner instead of voi
   await two.close();
 });
 
-test('maintenance: every page is the unavailable notice and the API is refused', async () => {
-  const { config } = await import('../src/config.js');
-  config.maintenance = true;
-  let down;
-  try { down = await boot({ analysisPool: app.ctx.analysisPool }); } finally { config.maintenance = false; }
-  for (const p of ['/', '/play', '/wallet']) {
-    const r = await fetch(down.base + p);
-    assert.equal(r.status, 503);
-    const html = await r.text();
-    assert.match(html, /ChessBets is unavailable/);
-    assert.doesNotMatch(html, /<a |<button|<script/, 'nothing to click or run');
+test('admin can make the site unavailable, and it survives a restart', async () => {
+  const shared = { analysisPool: app.ctx.analysisPool };
+  const one = await boot(shared);
+  const [a, b, c, boss] = [new Client(one.base), new Client(one.base), new Client(one.base), new Client(one.base)];
+  for (const [cl, name] of [[a, 'off_a'], [b, 'off_b'], [c, 'off_c']]) {
+    await cl.register(name);
+    await cl.fund(1000);
+    await cl.connect();
   }
-  assert.equal((await fetch(down.base + '/api/config')).status, 503);
-  assert.equal((await fetch(down.base + '/api/register', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status, 503);
-  assert.equal((await fetch(down.base + '/fonts/figtree.woff2')).status, 200);
-  await down.close();
+  await boss.register('off_boss');
+  await one.ctx.db.users.update({ _id: boss.user.id }, { $set: { is_admin: 1 } });
+  a.send({ t: 'queue-join', tc: 3, stake: 100 });
+  await a.wait((m) => m.t === 'queue' && m.state === 'joined');
+  b.send({ t: 'queue-join', tc: 3, stake: 100 });
+  const { id: gameId } = await a.wait((m) => m.t === 'matched');
+  c.send({ t: 'queue-join', tc: 10, stake: 500 });
+  await c.wait((m) => m.t === 'queue' && m.state === 'joined');
+
+  assert.equal((await a.req('/api/admin/maintenance', { on: true })).status, 404, 'players cannot switch it');
+  const r = await boss.req('/api/admin/maintenance', { on: true });
+  assert.deepEqual(r.data, { maintenance: true, queued: 1, games: 1 });
+  for (const cl of [a, b, c]) await cl.wait((m) => m.t === 'site-offline');
+  for (const name of ['off_a', 'off_b', 'off_c']) assert.equal((await one.ctx.db.users.findOne({ username: name })).balance, 1000);
+  const g = await one.ctx.db.games.findOne({ _id: gameId });
+  assert.equal(g.status, 'aborted');
+  assert.equal(g.reason, 'site-offline');
+
+  const notice = async (base, cl) => {
+    for (const p of ['/', '/play', '/wallet']) {
+      const res = await fetch(base + p, { headers: { cookie: cl?.cookieHeader() || '' } });
+      assert.equal(res.status, 503);
+      const html = await res.text();
+      assert.match(html, /ChessBets is unavailable/);
+      assert.doesNotMatch(html, /<a |<button|<script/, 'nothing to click or run');
+    }
+  };
+  await notice(one.base);
+  await notice(one.base, a);
+  assert.equal((await fetch(one.base + '/login')).status, 200, 'admins can still reach the sign-in page');
+  assert.equal((await fetch(one.base + '/js/app.js')).status, 200);
+  assert.equal((await a.req('/api/config')).data.maintenance, true);
+  const refused = await a.req('/api/wallet');
+  assert.equal(refused.status, 503);
+  assert.equal(refused.data.code, 'maintenance');
+  assert.equal((await new Client(one.base).req('/api/register', { username: 'off_new', password: 'password123', adult: true, terms: true })).status, 503);
+  assert.equal((await a.req('/api/login', { username: 'off_a', password: 'password123' })).status, 200);
+  // A player's new connection is sent away; an admin's works as normal.
+  const late = new WebSocket(one.base.replace('http', 'ws') + '/ws', { headers: { cookie: a.cookieHeader(), origin: one.base } });
+  assert.equal(JSON.parse(await new Promise((res) => late.once('message', res))).t, 'site-offline');
+  assert.equal(await new Promise((res) => late.once('close', res)), 4503);
+  assert.equal((await fetch(one.base + '/', { headers: { cookie: boss.cookieHeader() } })).status, 200);
+  assert.equal((await boss.req('/api/wallet')).status, 200);
+  await boss.connect();
+  boss.close();
+  for (const cl of [a, b, c]) cl.close();
+  await one.close({ keep: true });
+
+  // A restart keeps the site unavailable until an admin reopens it.
+  const two = await boot({ ...shared, dbName: one.dbName });
+  await notice(two.base);
+  boss.base = two.base;
+  assert.equal((await boss.req('/api/admin/overview')).data.maintenance, true);
+  assert.deepEqual((await boss.req('/api/admin/maintenance', { on: false })).data, { maintenance: false });
+  assert.equal((await fetch(two.base + '/')).status, 200);
+  assert.equal((await fetch(two.base + '/api/config').then((x) => x.json())).maintenance, false);
+  await checkBooks(two.ctx.db);
+  await two.close();
 });
 
 test('restart: unfinished games are voided and every open stake is returned', async () => {
