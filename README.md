@@ -150,6 +150,7 @@ The server tests check after every scenario that each user's ledger sums to thei
 | Variable | Default | |
 |---|---|---|
 | `PORT` / `HOST` | 3000 / 0.0.0.0 | |
+| `MAINTENANCE` | on | Every page shows "ChessBets is unavailable" and the API and live connections are refused (payment watching keeps running). Set `0` to open the site. |
 | `MONGODB_URI` | | required |
 | `MONGODB_DB` | chessbets | database name |
 | `ADMIN_USERS` | | comma-separated usernames |

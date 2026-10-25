@@ -507,6 +507,24 @@ test('restart: a finished game that never settled pays the winner instead of voi
   await two.close();
 });
 
+test('maintenance: every page is the unavailable notice and the API is refused', async () => {
+  const { config } = await import('../src/config.js');
+  config.maintenance = true;
+  let down;
+  try { down = await boot({ analysisPool: app.ctx.analysisPool }); } finally { config.maintenance = false; }
+  for (const p of ['/', '/play', '/wallet']) {
+    const r = await fetch(down.base + p);
+    assert.equal(r.status, 503);
+    const html = await r.text();
+    assert.match(html, /ChessBets is unavailable/);
+    assert.doesNotMatch(html, /<a |<button|<script/, 'nothing to click or run');
+  }
+  assert.equal((await fetch(down.base + '/api/config')).status, 503);
+  assert.equal((await fetch(down.base + '/api/register', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status, 503);
+  assert.equal((await fetch(down.base + '/fonts/figtree.woff2')).status, 200);
+  await down.close();
+});
+
 test('restart: unfinished games are voided and every open stake is returned', async () => {
   const shared = { analysisPool: app.ctx.analysisPool };
   const one = await boot(shared);

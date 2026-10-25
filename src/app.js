@@ -78,6 +78,25 @@ async function checkMode(db) {
   }
 }
 
+// The whole site while config.maintenance is on: one box, nothing to click.
+const MAINTENANCE_PAGE = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ChessBets is unavailable</title><link rel="icon" href="/favicon.svg">
+<style>
+@font-face { font-family: Figtree; src: url(/fonts/figtree.woff2) format('woff2'); font-weight: 300 900; }
+html, body { margin: 0; height: 100%; background: #0f212e; color: #fff; font-family: Figtree, system-ui, sans-serif; }
+body { display: grid; place-items: center; padding: 16px; box-sizing: border-box; user-select: none; }
+.box { background: #213743; border-radius: 12px; padding: 40px 32px; max-width: 440px; width: 100%; box-sizing: border-box; text-align: center; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45); }
+.mark { width: 48px; height: 48px; margin: 0 auto 18px; }
+h1 { font-size: 26px; margin: 0 0 10px; }
+p { color: #b1bad3; font-size: 15px; font-weight: 500; line-height: 1.5; margin: 0; }
+</style></head>
+<body><div class="box" role="alertdialog" aria-labelledby="t">
+<svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><path fill="#00e701" d="M9 27h13.5l-.9-3.4c2.7-2.6 3.7-5.7 3.7-8.9 0-5-3.8-8.2-8.9-8.2L15 4.8l-1.1 2.4C10.8 8.3 9.2 10.5 8.3 12.8L5 16.3l1.7 2.3 3.6-1c1-.3 2-.1 2.6.4-2 2.4-3.8 5.3-3.9 9Z"/></svg>
+<h1 id="t">ChessBets is unavailable</h1>
+<p>The site is unavailable right now. Please check back later.</p>
+</div></body></html>`;
+
 const escapeRegex = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export async function createApp(opts = {}) {
@@ -208,6 +227,15 @@ export async function createApp(opts = {}) {
       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     next();
   });
+
+  if (config.maintenance) {
+    app.use((req, res, next) => {
+      if (req.path === '/favicon.svg' || req.path.startsWith('/fonts/')) return next();
+      res.status(503).set('Retry-After', '3600');
+      if (req.path.startsWith('/api')) return res.json({ error: 'ChessBets is unavailable right now.' });
+      res.type('html').send(MAINTENANCE_PAGE);
+    });
+  }
 
   // Every browser gets a random device id. It is how two accounts on one
   // machine are kept apart in matchmaking.
@@ -610,7 +638,7 @@ export async function createApp(opts = {}) {
   app.get(/^\/(?!api|ws|vendor).*/, (req, res) => res.sendFile(path.join(ROOT, 'public/index.html')));
 
   const server = http.createServer(app);
-  ctx.hub.attach(server);
+  if (!config.maintenance) ctx.hub.attach(server); // with no handler, live connections are dropped
 
   // `crash: true` stops everything without waiting for in-flight work, the
   // way a killed process would (used by the restart test).
