@@ -184,6 +184,7 @@ export function createWallet(ctx) {
     });
     hub.toUser(d.user_id, { t: 'wallet', deposit: await depositRow(id) });
     hub.pushBalance(d.user_id);
+    await signupBonus(d.user_id);
   }
 
   // ------------------------------------------------- USDT deposit requests
@@ -368,8 +369,34 @@ export function createWallet(ctx) {
       await markDeposit(s);
       return s;
     });
-    if (status === 'credited') hub.pushBalance(userId);
+    if (status === 'credited') {
+      hub.pushBalance(userId);
+      await signupBonus(userId);
+    }
     return status;
+  }
+
+  // The sign-up bonus (Terms section 19). Paid once, to an active account
+  // made while the offer was on, as soon as its credited deposits add up to
+  // the minimum. The house pays for it. Never throws: a failure here must not
+  // undo or repeat the deposit that triggered it, and the next deposit retries.
+  async function signupBonus(userId) {
+    try { await payBonus(userId); } catch (e) { console.error(`sign-up bonus for user ${userId}: ${e.message}`); }
+  }
+  async function payBonus(userId) {
+    if (!config.signupBonus) return;
+    const u = await db.users.findOne({ _id: userId }, { projection: { bonus: 1, status: 1 } });
+    if (u?.bonus !== 'pending' || u.status !== 'active') return;
+    if ((await db.ledger.sum('$amount', { user_id: userId, kind: 'deposit' })) < config.signupBonusMinDeposit) return;
+    const paid = await db.tx(async () => {
+      if (!(await db.users.modify({ _id: userId, bonus: 'pending' }, { $set: { bonus: 'paid', bonus_at: now() } }))) return false;
+      await money.userEntry(userId, config.signupBonus, 'bonus', `bonus:${userId}`, 'Sign-up bonus');
+      await money.house(-config.signupBonus, 'bonus', `bonus:${userId}`);
+      return true;
+    });
+    if (!paid) return;
+    hub.toUser(userId, { t: 'notice', kind: 'bonus', amount: config.signupBonus });
+    hub.pushBalance(userId);
   }
 
   function record(id, tx, userId, depId, status, note = null, cents = null) {
@@ -587,6 +614,7 @@ export function createWallet(ctx) {
     });
     hub.toUser(userId, { t: 'wallet', deposit: await depositRow(id) });
     hub.pushBalance(userId);
+    await signupBonus(userId);
     return depositRow(id);
   }
 

@@ -1,4 +1,4 @@
-import { api, openModal, closeModal, toast, esc, icon } from '../lib.js';
+import { api, openModal, closeModal, toast, esc, icon, money } from '../lib.js';
 import { store } from '../store.js';
 import { onSignedIn } from '../app.js';
 
@@ -70,7 +70,8 @@ export function openAuth(mode = 'login', { then } = {}) {
       closeModal();
       onSignedIn();
       toast(mode === 'login' ? `Welcome back, ${r.user.username}` : `Welcome, ${r.user.username}`, {
-        kind: 'ok', body: mode === 'register' ? (store.config?.payments === 'crypto' ? 'Open the wallet to make a deposit.' : 'Open the wallet to add paper funds.') : '',
+        kind: 'ok', body: mode === 'register' ? (store.config?.payments === 'crypto' ? 'Open the wallet to make a deposit.' : 'Open the wallet to add paper funds.')
+          + (store.config?.signupBonus ? ` Deposit ${money(store.config.signupBonus.minDeposit).replace('.00', '')} or more and we add your ${money(store.config.signupBonus.amount).replace('.00', '')} sign-up bonus.` : '') : '',
       });
       then?.();
     } catch (err) {

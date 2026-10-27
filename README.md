@@ -167,6 +167,7 @@ The server tests check after every scenario that each user's ledger sums to thei
 | `TRON_ADDRESS` | | Tron address that receives USDT |
 | `BTC_CONFIRMATIONS` / `BTC_MIN_CREDIT` | 2 / 100 | cents |
 | `MIN_DEPOSIT` / `MAX_DEPOSIT` | 1000 / 500000 | cents, for USDT requests |
+| `SIGNUP_BONUS` / `SIGNUP_BONUS_MIN_DEPOSIT` | 100 / 5000 | cents. Sign-up bonus (Terms section 19), paid once when an account made while the offer is on has deposits credited that add up to the minimum. The house pays it. `SIGNUP_BONUS=0` turns the offer and the popup off |
 | `CRYPTO_POLL_MS` | 60000 | how often the chains are checked |
 | `BTC_API` / `BTC_PRICE_URLS` / `TRON_API` / `TRONGRID_API_KEY` | mempool.space, blockstream.info, Coinbase / TronGrid | comma-separated fallbacks |
 

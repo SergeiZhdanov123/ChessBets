@@ -226,7 +226,7 @@ export async function createApp(opts = {}) {
     if (!u) return null;
     return {
       id: u.id, username: u.username, balance: u.balance, held: await ctx.money.heldTotal(u.id),
-      status: u.status, suspendedAt: u.suspended_at, isAdmin: !!u.is_admin, createdAt: u.created_at,
+      status: u.status, suspendedAt: u.suspended_at, isAdmin: !!u.is_admin, createdAt: u.created_at, bonus: u.bonus ?? null,
     };
   }
   const freshUser = async (id) => publicUser(await db.users.findOne({ _id: id }));
@@ -352,6 +352,7 @@ export async function createApp(opts = {}) {
       status: 'active', suspended_at: null, suspend_reason: null, forfeited: 0, review: 0,
       is_admin: 0, // admins are made with `npm run make-admin`, never by signing up
       created_at: Date.now(), created_ip: req.ip2, device_id: req.device, last_ip: null, last_seen: null,
+      bonus: config.signupBonus > 0 ? 'pending' : null, // sign-up bonus, paid by wallet.signupBonus
     };
     try { await db.users.insert(doc); }
     catch (e) { if (e.code === 11000) return res.status(409).json(taken); throw e; }
@@ -416,6 +417,7 @@ export async function createApp(opts = {}) {
       chat: CHAT_PRESETS,
       counts: ctx.matchmaker.counts(),
       maintenance: ctx.site.maintenance,
+      signupBonus: config.signupBonus > 0 ? { amount: config.signupBonus, minDeposit: config.signupBonusMinDeposit } : null,
     });
   });
 
@@ -574,13 +576,24 @@ export async function createApp(opts = {}) {
   app.post('/api/admin/maintenance', needUser, needAdmin, wrap(async (req, res) => {
     res.json(await ctx.setMaintenance(req.body?.on === true));
   }));
+  // Every account (newest first), with what each has deposited and withdrawn.
+  // ?q= narrows it to usernames containing the text.
   app.get('/api/admin/users', needUser, needAdmin, wrap(async (req, res) => {
     const q = String(req.query.q || '').toLowerCase().slice(0, 32);
+    const users = await db.users.find(
+      q ? { username_lc: { $regex: escapeRegex(q) } } : {},
+      { projection: { username: 1, balance: 1, status: 1, review: 1, is_admin: 1, bonus: 1, created_at: 1, last_seen: 1, last_ip: 1 }, sort: { _id: -1 }, limit: 5000 },
+    );
+    const flows = await db.ledger.aggregate([
+      { $match: { user_id: { $in: users.map((u) => u.id) }, kind: { $in: ['deposit', 'withdrawal', 'withdrawal_refund'] } } },
+      { $group: { _id: { u: '$user_id', k: '$kind' }, total: { $sum: '$amount' } } },
+    ]);
+    const sum = (id, k) => flows.find((f) => f._id.u === id && f._id.k === k)?.total || 0;
     res.json({
-      users: await db.users.find(
-        q ? { username_lc: { $regex: escapeRegex(q) } } : {},
-        { projection: { username: 1, balance: 1, status: 1, review: 1, created_at: 1, last_ip: 1 }, sort: { _id: -1 }, limit: 50 },
-      ),
+      users: users.map((u) => ({
+        ...u, isAdmin: !!u.is_admin, deposited: sum(u.id, 'deposit'),
+        withdrawn: -(sum(u.id, 'withdrawal') + sum(u.id, 'withdrawal_refund')),
+      })),
     });
   }));
   app.get('/api/admin/users/:id', needUser, needAdmin, wrap(async (req, res) => {

@@ -8,6 +8,7 @@ process.env.MATCH_TICK_MS ??= '50';
 process.env.SCHEDULE_TICK_MS ??= '3600000';
 process.env.REGISTER_PER_HOUR ??= '100000';
 process.env.LOGIN_PER_MINUTE ??= '100000';
+process.env.SIGNUP_BONUS ??= '0'; // on only in bonus.test.js, so other balances stay exact
 
 import WebSocket from 'ws';
 import { testMongo, testDbName, dropDb } from './mongo.js';

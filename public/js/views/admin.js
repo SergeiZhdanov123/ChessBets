@@ -5,6 +5,7 @@ import { navigate } from '../app.js';
 const HOUSE_LABEL = {
   rake: 'Service fees', withdraw_fee: 'Withdrawal fees', account_closed: 'Balances of removed accounts',
   forfeit: 'Forfeited balances', fairplay_refund: 'Fair-play refunds', reinstated: 'Restored balances',
+  bonus: 'Sign-up bonuses',
 };
 
 export default function admin(el, [userId]) {
@@ -14,7 +15,7 @@ export default function admin(el, [userId]) {
   const box = el.querySelector('#a');
 
   async function load() {
-    const [o, t, pay] = await Promise.all([api('/api/admin/overview'), api('/api/admin/tickets'), api('/api/admin/payments')]);
+    const [o, t, pay, { users }] = await Promise.all([api('/api/admin/overview'), api('/api/admin/tickets'), api('/api/admin/payments'), api('/api/admin/users')]);
     const house = Object.fromEntries(o.house.map((h) => [h.kind, h]));
     const net = o.house.reduce((s, h) => s + h.total, 0);
     // Ledger kinds with no label of their own (left over from removed features).
@@ -41,9 +42,10 @@ export default function admin(el, [userId]) {
 
       ${pay.mode === 'crypto' ? paymentsHtml(pay) : ''}
 
-      <div class="section-head"><h2>${icon('search')}Find a player</h2></div>
-      <div style="display:flex;gap:8px;margin-bottom:10px"><input class="input" id="q" placeholder="Username" style="max-width:320px"><button class="btn btn-gray" id="qs">Search</button></div>
-      <div id="qr"></div>
+      <div class="section-head"><h2>${icon('users')}All players <span class="dim" id="uc">${users.length}</span></h2></div>
+      <input class="input" id="q" type="search" placeholder="Filter by username" autocomplete="off" style="max-width:320px;margin-bottom:10px">
+      <div class="table-wrap players-wrap"><table class="table"><thead><tr><th>Player</th><th>Status</th><th class="r">Balance</th><th class="r">Deposited</th><th class="r">Withdrawn</th><th>Bonus</th><th>Joined</th><th>Last sign-in</th></tr></thead>
+        <tbody id="qr"></tbody></table></div>
 
       <div class="section-head" style="margin-top:24px"><h2>${icon('shield')}Flagged and suspended</h2></div>
       ${o.flagged.length ? `<div class="table-wrap"><table class="table"><thead><tr><th>Player</th><th>Status</th><th>Top game evidence</th><th class="r">Events</th><th class="r">Balance</th></tr></thead><tbody>
@@ -103,12 +105,21 @@ export default function admin(el, [userId]) {
       await api(`/api/admin/tickets/${tid}/reply`, { body, close: !!b.dataset.close });
       load();
     }));
-    const search = async () => {
-      const { users } = await api(`/api/admin/users?q=${encodeURIComponent(box.querySelector('#q').value)}`);
-      box.querySelector('#qr').innerHTML = users.length ? `<table class="table"><tbody>${users.map((u) => `<tr><td><a class="rowlink strong" href="/admin/${u.id}">${esc(u.username)}</a></td><td>${esc(u.status)}${u.review ? ' · review' : ''}</td><td class="r num">${money(u.balance)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">No match</div>';
+    const BONUS = { pending: 'Waiting for deposit', paid: 'Paid' };
+    const showPlayers = () => {
+      const q = box.querySelector('#q').value.trim().toLowerCase();
+      const rows = q ? users.filter((u) => u.username.toLowerCase().includes(q)) : users;
+      box.querySelector('#uc').textContent = q ? `${rows.length} of ${users.length}` : users.length;
+      box.querySelector('#qr').innerHTML = rows.length ? rows.map((u) => `<tr>
+        <td><a class="rowlink strong" href="/admin/${u.id}">${esc(u.username)}</a>${u.isAdmin ? ' <span class="dim">admin</span>' : ''}</td>
+        <td>${u.status === 'suspended' ? '<span class="red">Suspended</span>' : u.review ? '<span class="status wait">Under review</span>' : 'Active'}</td>
+        <td class="r num strong">${money(u.balance)}</td><td class="r num">${money(u.deposited)}</td><td class="r num">${money(u.withdrawn)}</td>
+        <td class="${u.bonus === 'paid' ? 'green' : 'dim'}">${BONUS[u.bonus] || '-'}</td>
+        <td>${dateTime(u.created_at)}</td><td class="dim">${u.last_seen ? dateTime(u.last_seen) : '-'}</td></tr>`).join('')
+        : '<tr><td colspan="8" class="dim">No player matches</td></tr>';
     };
-    box.querySelector('#qs').onclick = search;
-    box.querySelector('#q').onkeydown = (e) => { if (e.key === 'Enter') search(); };
+    showPlayers();
+    box.querySelector('#q').oninput = showPlayers;
   }
   load().catch((e) => { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
 }
