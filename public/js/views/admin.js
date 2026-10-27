@@ -44,7 +44,7 @@ export default function admin(el, [userId]) {
 
       <div class="section-head"><h2>${icon('users')}All players <span class="dim" id="uc">${users.length}</span></h2></div>
       <input class="input" id="q" type="search" placeholder="Filter by username" autocomplete="off" style="max-width:320px;margin-bottom:10px">
-      <div class="table-wrap players-wrap"><table class="table"><thead><tr><th>Player</th><th>Status</th><th class="r">Balance</th><th class="r">Deposited</th><th class="r">Withdrawn</th><th>Bonus</th><th>Joined</th><th>Last sign-in</th></tr></thead>
+      <div class="table-wrap players-wrap"><table class="table"><thead><tr><th>Player</th><th>Status</th><th class="r">Balance</th><th class="r">Deposited</th><th class="r">Withdrawn</th><th>Joined</th><th>Last sign-in</th></tr></thead>
         <tbody id="qr"></tbody></table></div>
 
       <div class="section-head" style="margin-top:24px"><h2>${icon('shield')}Flagged and suspended</h2></div>
@@ -105,7 +105,6 @@ export default function admin(el, [userId]) {
       await api(`/api/admin/tickets/${tid}/reply`, { body, close: !!b.dataset.close });
       load();
     }));
-    const BONUS = { pending: 'Waiting for deposit', paid: 'Paid' };
     const showPlayers = () => {
       const q = box.querySelector('#q').value.trim().toLowerCase();
       const rows = q ? users.filter((u) => u.username.toLowerCase().includes(q)) : users;
@@ -114,9 +113,8 @@ export default function admin(el, [userId]) {
         <td><a class="rowlink strong" href="/admin/${u.id}">${esc(u.username)}</a>${u.isAdmin ? ' <span class="dim">admin</span>' : ''}</td>
         <td>${u.status === 'suspended' ? '<span class="red">Suspended</span>' : u.review ? '<span class="status wait">Under review</span>' : 'Active'}</td>
         <td class="r num strong">${money(u.balance)}</td><td class="r num">${money(u.deposited)}</td><td class="r num">${money(u.withdrawn)}</td>
-        <td class="${u.bonus === 'paid' ? 'green' : 'dim'}">${BONUS[u.bonus] || '-'}</td>
         <td>${dateTime(u.created_at)}</td><td class="dim">${u.last_seen ? dateTime(u.last_seen) : '-'}</td></tr>`).join('')
-        : '<tr><td colspan="8" class="dim">No player matches</td></tr>';
+        : '<tr><td colspan="7" class="dim">No player matches</td></tr>';
     };
     showPlayers();
     box.querySelector('#q').oninput = showPlayers;

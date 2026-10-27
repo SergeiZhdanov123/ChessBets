@@ -66,11 +66,6 @@ export const config = {
   cryptoPollMs: num(env.CRYPTO_POLL_MS, 60_000),
   openInvoices: 3,
 
-  // Sign-up bonus (Terms section 19): paid once to an account made while the
-  // offer is on, when its credited deposits reach the minimum. 0 turns it off.
-  signupBonus: num(env.SIGNUP_BONUS, 100),
-  signupBonusMinDeposit: num(env.SIGNUP_BONUS_MIN_DEPOSIT, 5000),
-
   depositConfirmMs: num(env.DEPOSIT_CONFIRM_MS, 1500),
   withdrawProcessMs: num(env.WITHDRAW_PROCESS_MS, 2500),
   scheduleTickMs: num(env.SCHEDULE_TICK_MS, 15_000),

@@ -580,7 +580,7 @@ select.input { appearance: none; padding-right: 30px; background-image: url("dat
 .modal-foot { background: var(--bg-1); padding: 14px 20px; color: var(--text-3); font-size: 12.5px; font-weight: 600; text-align: center; }
 .modal-foot a, .modal-foot button { color: var(--text); font-weight: 700; }
 
-/* Sign-up bonus offer */
+/* Sign-up popup for signed-out visitors */
 .promo-modal .modal-head { position: absolute; top: 0; right: 0; z-index: 2; padding: 10px; }
 .promo-modal .modal-head h3 { display: none; }
 .promo-modal .modal-head .icon-btn { background: rgba(15, 33, 46, 0.6); }

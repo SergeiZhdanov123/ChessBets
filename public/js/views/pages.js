@@ -3,7 +3,7 @@ import { esc } from '../lib.js';
 
 export default function pages(el, [which]) {
   el.innerHTML = which === 'terms' ? terms() : which === 'privacy' ? privacy() : which === 'legal' ? legal() : fairPlay();
-  // Links like /terms#bonus open at that section.
+  // A link with a #id opens at that heading.
   const target = location.hash && el.querySelector(location.hash.replace(/[^#\w-]/g, ''));
   if (target) requestAnimationFrame(() => target.scrollIntoView({ block: 'start' }));
 }
@@ -44,7 +44,7 @@ function fairPlay() {
   </article>`;
 }
 
-const UPDATED = 'October 26, 2026';
+const UPDATED = 'October 27, 2026';
 
 function terms() {
   const cfg = store.config;
@@ -108,7 +108,7 @@ function terms() {
 
     <h2>7. Your balance, deposits and withdrawals</h2>
     <ul>
-      <li><b>What a balance is for.</b> Your balance can only be used to pay entry fees, receive prizes, refunds and bonuses, pay the withdrawal fee, and be withdrawn to you. It cannot be sent to another player or anyone else, and it cannot be used to buy anything else. There is no way to transfer value between accounts.</li>
+      <li><b>What a balance is for.</b> Your balance can only be used to pay entry fees, receive prizes and refunds, pay the withdrawal fee, and be withdrawn to you. It cannot be sent to another player or anyone else, and it cannot be used to buy anything else. There is no way to transfer value between accounts.</li>
       <li><b>Withdrawals go to you only.</b> Every withdrawal must go to a wallet you control yourself, or to an account in your own name at an exchange. Do not use ChessBets to pay anyone else. We may hold, refuse or ask questions about any withdrawal that appears to be going to someone else.</li>
       <li>Your balance is a record of credit for use on ChessBets, kept in US dollars. It is not a bank account or deposit, earns no interest, and is not insured. ChessBets is not a cryptocurrency exchange or wallet service: we do not buy, sell, hold or send cryptocurrency for you as a service.</li>
       <li>Every deposit, entry fee, prize, refund and withdrawal appears in the transaction history in your wallet.</li>
@@ -194,17 +194,8 @@ function terms() {
     <h2>18. Playing responsibly</h2>
     <p>Only pay entry fees you can afford to lose. If you want a break or want your account closed for good, <a href="/support">contact support</a> and we will close it. If playing for money is causing you problems, help is available from organisations such as the National Council on Problem Gambling (1-800-GAMBLER in the US).</p>
 
-    <h2 id="bonus">19. Sign-up bonus</h2>
-    ${cfg.signupBonus ? `<ul>
-      <li><b>The offer.</b> If you create your account while this offer is running, you get a one-time sign-up bonus of ${usd(cfg.signupBonus.amount)} once you have deposited at least ${usd(cfg.signupBonus.minDeposit)}. Deposits count once they are credited to your balance. Several deposits that add up to ${usd(cfg.signupBonus.minDeposit)} count.</li>
-      <li><b>How it is paid.</b> The bonus is added to your balance automatically as soon as your credited deposits reach ${usd(cfg.signupBonus.minDeposit)}, and shows as "Sign-up bonus" in your transaction history. From then on it is part of your balance under Section 7.</li>
-      <li><b>Who qualifies.</b> One bonus per person, on one account (Section 5). Accounts made before the offer started and suspended accounts do not qualify, and deposits that are held, forfeited or never credited do not count.</li>
-      <li><b>Abuse.</b> If someone makes more than one account, or breaks these Terms in some other way to get a bonus, we may take the bonus back as money credited by mistake under Section 7.</li>
-      <li><b>Changes.</b> We may change or end this offer at any time. A bonus that has already been paid stays paid.</li>
-    </ul>` : '<p>There is no sign-up bonus on offer right now. A bonus that has already been paid stays paid.</p>'}
-
-    <h2>20. General</h2>
-    <p>These Terms, the Privacy Policy and the Fair Play rules are the whole agreement between you and us about ChessBets. If any part is found unenforceable, the rest stays in effect. If we do not enforce a right, we have not given it up. You may not transfer your rights under these Terms; we may transfer ours. Sections 2, 3 and 7 to 20 survive the end of your account. Questions go to <a href="/support">support</a>.</p>
+    <h2>19. General</h2>
+    <p>These Terms, the Privacy Policy and the Fair Play rules are the whole agreement between you and us about ChessBets. If any part is found unenforceable, the rest stays in effect. If we do not enforce a right, we have not given it up. You may not transfer your rights under these Terms; we may transfer ours. Sections 2, 3 and 7 to 19 survive the end of your account. Questions go to <a href="/support">support</a>.</p>
   </article>`;
 }
 

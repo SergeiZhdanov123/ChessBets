@@ -3,7 +3,7 @@ import { store, bus, ws, connect, loadConfig, refreshMe } from './store.js';
 import { sound } from './sound.js';
 import { openAuth } from './views/auth.js';
 import { openWallet } from './views/wallet.js';
-import { maybeShowBonus } from './views/bonus.js';
+import { maybeShowPromo } from './views/promo.js';
 
 const routes = [
   [/^\/$/, () => import('./views/home.js')],
@@ -238,7 +238,6 @@ bus.on('reinstated', () => { refreshMe(); toast('Your account has been reinstate
 bus.on('notice', (m) => {
   if (m.kind === 'refund') { sound.notify(); toast(`Refunded ${money(m.amount)}`, { kind: 'ok', body: 'An opponent who beat you was removed for fair play. Your entry fee is back.', ms: 8000 }); }
   if (m.kind === 'ticket') toast('Support replied to your ticket', { kind: 'info', body: 'Open Support to read it.' });
-  if (m.kind === 'bonus') { sound.notify(); toast(`Sign-up bonus: ${money(m.amount)} added`, { kind: 'ok', body: 'Thanks for your deposit. It is in your balance now.', ms: 8000 }); }
 });
 bus.on('wallet', (m) => {
   const tag = (x) => [x.coin_amount, String(x.coin || '').split('-')[0]].filter(Boolean).join(' ');
@@ -284,5 +283,5 @@ export function onSignedIn() {
   renderFooter();
   connect();
   await render();
-  setTimeout(maybeShowBonus, 700);
+  setTimeout(maybeShowPromo, 700);
 })();
