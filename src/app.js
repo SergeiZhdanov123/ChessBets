@@ -343,7 +343,7 @@ export async function createApp(opts = {}) {
     const name = String(username || '').trim();
     if (!/^[A-Za-z0-9_]{3,16}$/.test(name)) return res.status(400).json({ error: 'Username must be 3 to 16 letters, numbers or underscores', field: 'username' });
     if (typeof password !== 'string' || password.length < 8 || password.length > 128) return res.status(400).json({ error: 'Password must be at least 8 characters', field: 'password' });
-    if (adult !== true || terms !== true) return res.status(400).json({ error: 'Confirm you are 18 or older and accept the terms', field: 'terms' });
+    if (adult !== true || terms !== true) return res.status(400).json({ error: 'Confirm you are 21 or older and accept the terms', field: 'terms' });
     const taken = { error: 'That username is taken', field: 'username' };
     if (await db.users.findOne({ username_lc: name.toLowerCase() }, { projection: { _id: 1 } })) return res.status(409).json(taken);
     const id = await db.nextId('users');

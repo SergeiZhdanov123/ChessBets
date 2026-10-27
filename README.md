@@ -163,6 +163,7 @@ The server tests check after every scenario that each user's ledger sums to thei
 | `REGISTER_PER_HOUR` / `LOGIN_PER_MINUTE` | 5 / 12 | per IP |
 | `PAYMENTS` | paper | `crypto` for real payments |
 | `BTC_XPUB` | | zpub/xpub/ypub of the site's bitcoin wallet (vpub/tpub for testnet) |
+| `BTC_START_INDEX` | 0 | Offset for new players' wallet address numbers: the next player gets this plus the number already handed out. Players keep the address they already have. Use it to skip addresses the wallet gave out elsewhere |
 | `TRON_ADDRESS` | | Tron address that receives USDT |
 | `BTC_CONFIRMATIONS` / `BTC_MIN_CREDIT` | 2 / 100 | cents |
 | `MIN_DEPOSIT` / `MAX_DEPOSIT` | 1000 / 500000 | cents, for USDT requests |

@@ -78,7 +78,7 @@ function terms() {
 
     <h2>4. Who may use ChessBets</h2>
     <ul>
-      <li>You must be at least 18 years old, and at least the age of majority where you live if that is higher.</li>
+      <li>You must be at least 21 years old, and at least the age of majority where you live if that is higher.</li>
       <li>You may only enter paid competitions while you are physically in a place where paid skill competitions like ours are lawful for you. Laws differ between countries and between US states, and it is your responsibility, not ours, to know and follow the laws that apply to you. We make no promise that the service is lawful in your location. We may block or restrict access from any country, state or region at any time.</li>
       <li>You may not use ChessBets if you are located in, or a resident of, a country or region subject to comprehensive US sanctions, or if you are named on, or owned or controlled by someone named on, a US or other applicable sanctions list.</li>
       <li>You may not use the site if you have been banned from ChessBets before, or if you use a VPN, proxy or other tool to hide where you are.</li>
@@ -243,7 +243,7 @@ function privacy() {
     <p>You can ask through <a href="/support">support</a> to see the information we hold about you, to correct it, or to close your account and delete what we are not required to keep. Depending on where you live, you may have other rights under local law; contact support to use them. We may need to confirm the account is yours first.</p>
 
     <h2>Children</h2>
-    <p>ChessBets is for adults only. We do not knowingly collect information from anyone under 18, and we close accounts that belong to minors.</p>
+    <p>ChessBets is for adults only. We do not knowingly collect information from anyone under 21, and we close accounts that belong to anyone under 21.</p>
 
     <h2>Where it is stored</h2>
     <p>Your information is stored and processed in the United States and wherever our service providers operate. By using the site you agree to that transfer.</p>
