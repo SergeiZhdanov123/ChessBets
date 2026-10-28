@@ -3,7 +3,7 @@ import { store, bus, ws, connect, loadConfig, refreshMe } from './store.js';
 import { sound } from './sound.js';
 import { openAuth } from './views/auth.js';
 import { openWallet } from './views/wallet.js';
-import { maybeShowPromo } from './views/promo.js';
+import { track } from './track.js';
 
 const routes = [
   [/^\/$/, () => import('./views/home.js')],
@@ -12,6 +12,7 @@ const routes = [
   [/^\/games$/, () => import('./views/history.js')],
   [/^\/(fair-play|terms|privacy|legal)$/, () => import('./views/pages.js')],
   [/^\/support$/, () => import('./views/support.js')],
+  [/^\/admin\/analytics$/, () => import('./views/analytics.js')],
   [/^\/admin(?:\/(\d+))?$/, () => import('./views/admin.js')],
 ];
 
@@ -54,6 +55,7 @@ async function render() {
   }
   renderSidebar();
   renderMobileNav();
+  track('view');
   if (modal === 'wallet') store.user ? openWallet() : openAuth('login');
   if (modal === 'login' || modal === 'register') openAuth(modal);
 }
@@ -282,6 +284,5 @@ export function onSignedIn() {
   renderSuspended();
   renderFooter();
   connect();
-  await render();
-  setTimeout(maybeShowPromo, 700);
+  render();
 })();

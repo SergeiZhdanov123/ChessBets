@@ -1,5 +1,6 @@
 import { api, openModal, money, esc, icon, coinIcon, toast, dateTime, ago } from '../lib.js';
 import { store, bus } from '../store.js';
+import { track } from '../track.js';
 
 const KIND = {
   deposit: 'Deposit', withdrawal: 'Withdrawal', withdrawal_refund: 'Withdrawal declined', stake: 'Entry fee', stake_return: 'Entry fee returned',
@@ -11,6 +12,7 @@ let state = { tab: 'deposit', coin: null, wcoin: null, data: null, invoice: null
 
 export function openWallet(tab) {
   if (tab) state.tab = tab;
+  track('wallet_open', state.tab);
   const live = store.config?.payments === 'crypto';
   const m = openModal({
     title: 'Wallet', iconName: 'wallet', width: 520, body: '<div class="skel" style="height:260px"></div>',

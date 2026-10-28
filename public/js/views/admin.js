@@ -11,7 +11,7 @@ const HOUSE_LABEL = {
 export default function admin(el, [userId]) {
   if (!store.user?.isAdmin) { el.innerHTML = '<div class="empty" style="padding:80px 0">Not found</div>'; return; }
   if (userId) return userPage(el, +userId);
-  el.innerHTML = `<h1 class="page-title">${icon('admin')}Admin</h1><div id="a"><div class="skel" style="height:300px"></div></div>`;
+  el.innerHTML = `<div class="admin-top"><h1 class="page-title">${icon('admin')}Admin</h1><a class="btn btn-gray" href="/admin/analytics">${icon('chart')}Analytics</a></div><div id="a"><div class="skel" style="height:300px"></div></div>`;
   const box = el.querySelector('#a');
 
   async function load() {

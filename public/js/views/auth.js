@@ -1,9 +1,11 @@
 import { api, openModal, closeModal, toast, esc, icon } from '../lib.js';
 import { store } from '../store.js';
 import { onSignedIn } from '../app.js';
+import { track } from '../track.js';
 
 export function openAuth(mode = 'login', { then } = {}) {
   const reg = mode === 'register';
+  track('auth_open', mode);
   const m = openModal({
     title: reg ? 'Create an account' : 'Sign in',
     width: 440,

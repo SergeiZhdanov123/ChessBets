@@ -213,6 +213,7 @@ function privacy() {
       <li><b>Network and device:</b> your IP address when you register, sign in and play, and a random identifier stored in a cookie in your browser.</li>
       <li><b>Money:</b> your balance and every change to it.${live ? ' For deposits and withdrawals, the deposit addresses we assign you, the withdrawal addresses you give us, and the amounts and transaction ids.' : ''}</li>
       <li><b>Support:</b> the messages you send in support tickets.</li>
+      <li><b>How you use the site:</b> which pages you open, which buttons and links you press, the site that sent you here, and whether your screen is phone-sized, tied to the device cookie and to your account if you are signed in. We never record what you type.</li>
     </ul>
     <p>Chat between players is relayed during the game and is not saved once the game is over.</p>
 
@@ -221,11 +222,12 @@ function privacy() {
       <li>To run your account, games and balance${live ? ', and to send your withdrawals' : ''}.</li>
       <li>To detect and prevent cheating, multiple accounts, collusion and fraud. Move timing, focus data, IP addresses and device identifiers are used mainly for this.</li>
       <li>To answer support requests and appeals, keep the site secure, and comply with the law.</li>
+      <li>To see where people get stuck and improve the site. Usage records stay with us; we use no outside analytics service.</li>
     </ul>
     <p>We do not sell your information, and we do not use it for advertising.</p>
 
     <h2>Cookies and browser storage</h2>
-    <p>We use two cookies, both required for the site to work: a session cookie that keeps you signed in for up to 30 days, and a device cookie that links accounts used in the same browser (kept for up to two years). The device cookie is also how we count unique visitors per day; those daily records are deleted after 90 days. The site also saves a few display settings, like sound on or off, in your browser. There are no advertising or analytics cookies.</p>
+    <p>We use two cookies, both required for the site to work: a session cookie that keeps you signed in for up to 30 days, and a device cookie that links accounts used in the same browser (kept for up to two years). The device cookie is also how we count visitors and record how the site is used (see above); those records are deleted after 90 days. The site also saves a few display settings, like sound on or off, in your browser, and a random id for the current tab so pages seen in one visit can be grouped together. There are no advertising cookies and no third-party analytics.</p>
 
     <h2>Who we share it with</h2>
     <ul>

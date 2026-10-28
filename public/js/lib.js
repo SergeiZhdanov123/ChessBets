@@ -145,6 +145,7 @@ const P = {
   play: '<path d="M7 4.5v15l12.5-7.5Z"/>',
   chat: '<path d="M4 5h16v11H9l-5 4Z"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/>',
+  chart: '<path d="M4 20V11M10 20V5M16 20v-6M21 20H3"/>',
   sidebar: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>',
 };
 export const icon = (name, attrs = '') =>

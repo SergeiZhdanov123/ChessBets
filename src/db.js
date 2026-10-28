@@ -35,6 +35,8 @@ const INDEXES = {
   tickets: [[{ user_id: 1, updated_at: -1 }], [{ status: 1, updated_at: -1 }]],
   // One document per browser per UTC day (_id day:device); kept 90 days.
   visits: [[{ day: 1, device: 1 }], [{ at: 1 }, { expireAfterSeconds: 90 * 86_400 }]],
+  // Page views, clicks and screens opened, for Admin > Analytics; kept 90 days.
+  events: [[{ at: 1 }, { expireAfterSeconds: 90 * 86_400 }], [{ device: 1, at: 1 }], [{ kind: 1, user_id: 1 }]],
   counters: [],
 };
 export const COLLECTIONS = Object.keys(INDEXES);

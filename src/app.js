@@ -14,6 +14,7 @@ import { createEnforcement } from './enforcement.js';
 import { createWallet } from './wallet.js';
 import { btcWallet, tronAddressOk } from './chain.js';
 import { FairPlay, MODEL, accountEvidence } from './anticheat.js';
+import { analytics } from './analytics.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -404,6 +405,30 @@ export async function createApp(opts = {}) {
       .catch((e) => console.error('visit', e.message));
   }
 
+  // Usage events from public/js/track.js, for Admin > Analytics: page
+  // views, clicks, and the sign-up form and wallet opening. Each browser
+  // sends small batches; admins aren't recorded. Nothing typed is sent.
+  const TRACK_KINDS = new Set(['view', 'click', 'auth_open', 'wallet_open']);
+  const trackLimit = limiter(600, 3600_000);
+  const text = (v, max, re) => (typeof v === 'string' && v && v.length <= max && (!re || re.test(v)) ? v : null);
+  app.post('/api/t', (req, res) => {
+    res.status(204).end();
+    if (!req.device || req.user?.is_admin) return;
+    const t = Date.now();
+    const docs = [];
+    for (const e of Array.isArray(req.body?.e) ? req.body.e.slice(0, 40) : []) {
+      const path = text(e?.p, 80, /^\/[\w/:.-]*$/);
+      if (!TRACK_KINDS.has(e?.k) || !path || !trackLimit(req.device)) continue;
+      docs.push({
+        kind: e.k, device: req.device, user_id: req.user?.id ?? null,
+        session: text(e.s, 16, /^[a-z0-9]+$/), path, label: text(e.l, 60),
+        ref: e.k === 'view' ? text(e.r, 80, /^[\w.:-]+$/) : null, mobile: e.m === true,
+        at: new Date(Math.min(t, Math.max(t - 120_000, Number(e.t) || t))),
+      });
+    }
+    if (docs.length) db.events.raw.insertMany(docs, { ordered: false }).catch((err) => console.error('events', err.message));
+  });
+
   app.get('/api/config', (req, res) => {
     countVisit(req);
     res.json({
@@ -573,6 +598,10 @@ export async function createApp(opts = {}) {
   }));
   app.post('/api/admin/maintenance', needUser, needAdmin, wrap(async (req, res) => {
     res.json(await ctx.setMaintenance(req.body?.on === true));
+  }));
+  app.get('/api/admin/analytics', needUser, needAdmin, wrap(async (req, res) => {
+    const days = [1, 7, 30, 90].includes(+req.query.days) ? +req.query.days : 30;
+    res.json(await analytics(db, { days }));
   }));
   // Every account (newest first), with what each has deposited and withdrawn.
   // ?q= narrows it to usernames containing the text.

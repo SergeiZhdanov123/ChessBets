@@ -77,6 +77,8 @@ Deposit addresses look like `demo-btc-...` on purpose, so nobody can send real c
 
 **Visitors.** Admin shows unique visitors today, yesterday and over 7 days: one per browser (device cookie) per UTC day, counted when the page loads its config, so crawlers that don't run scripts and admins are left out. Records (`visits` collection) expire after 90 days.
 
+**Analytics.** Admin > Analytics (`/admin/analytics`) shows the sign-up funnel (visited, opened the sign-up form, created an account, opened the wallet, deposited, played, played 5+ games) with drop-off at each step, day-by-day visitors, new accounts and first deposits, visit length and depth, the page each visit ended on, what people clicked, where they came from (referrer or `?utm_source=`), phone vs computer, and every new account's furthest step. `public/js/track.js` sends page views, clicks and the sign-up form and wallet opening to `POST /api/t` (stored in `events`, expire after 90 days); admins and admin pages are never recorded, nothing typed is sent, and browsers an admin has signed in on are left out of every number. `src/analytics.js` builds the report.
+
 **Legal pages.** Terms, Privacy, Fair Play and Legal Basis (`/legal`, the public statement of ChessBets' legal position) live in `public/js/views/pages.js`. The Terms describe games as skill competitions with entry fees, prizes and a service fee, and restrict balances to entries, prizes, refunds and withdrawals to the player's own wallet; the Legal Basis page relies on those facts, so keep both in step with the product.
 
 **Making the site unavailable.** Admin has a "Make unavailable" button at the top. While it's on, players get a single "ChessBets is unavailable" box with nothing to click, every API call is refused, and open tabs reload into the notice. Games in progress are voided with both stakes returned and the queues are emptied. Deposits keep being credited. Admins can still sign in at `/login` and use the whole site, and "Reopen the site" turns it back off. The setting is stored in the database (`settings` collection), so a restart or redeploy keeps it.
@@ -125,6 +127,7 @@ The quick depth-12 relay plays about as accurately as a very strong human, and t
 ```
 server.js            entry point
 src/app.js           Express app, auth, REST API, admin
+src/analytics.js     Admin > Analytics report
 src/hub.js           WebSocket fan-out and in-game messages
 src/games.js         live game state, clocks, settlement
 src/matchmaking.js   the six queues

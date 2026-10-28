@@ -169,8 +169,7 @@ await check('suspension: banner, no refund message, play blocked, support reacha
   await mc.close();
   await admin.goto(base + '/admin');
   await admin.fill('#q', 'bob_e2e');
-  await admin.click('#qs');
-  await admin.click('#qr a');
+  await admin.click('#qr a:text-is("bob_e2e")');
   await admin.waitForURL(/\/admin\/\d+/);
   await admin.click('[data-act=suspend]');
   await admin.click('[data-yes]');
